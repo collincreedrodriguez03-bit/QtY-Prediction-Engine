@@ -31,6 +31,7 @@ data class EngineState(
     val latestSnapshot: IndicatorSnapshot? = null,
     val latestPrediction: PredictionRecord? = null,
     val recentPredictions: List<PredictionRecord> = emptyList(),
+    val recentPrices: List<Double> = emptyList(),
     val errorLog: String? = null,
     val mathDisplay: String = "INITIALIZING...",
     val totalRecordedPredictions: Int = 0
@@ -150,6 +151,7 @@ class EngineLoop(
 
         // 8. Update State Flow
         val recent = logger.getRecentPredictions(10)
+        val allHistoryPrices = priceHistory.getAll().map { it.price }
         _state.value = EngineState(
             isRunning = true,
             cycleCount = cycleCounter,
@@ -161,6 +163,7 @@ class EngineLoop(
             latestSnapshot = snapshot,
             latestPrediction = prediction,
             recentPredictions = recent,
+            recentPrices = allHistoryPrices,
             errorLog = null,
             mathDisplay = prediction.inputs.formulaDisplay,
             totalRecordedPredictions = logger.getAllPredictions().size

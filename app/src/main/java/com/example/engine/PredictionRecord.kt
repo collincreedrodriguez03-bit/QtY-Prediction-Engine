@@ -33,7 +33,7 @@ data class PredictionRecord(
     val strength: String, // "WEAK" | "MEDIUM" | "STRONG"
     val predictedPrice: Double,
     val currentPrice: Double = predictedPrice,
-    val predictionHorizon: Int = 60, // seconds
+    val predictionHorizon: Int = 30, // seconds
     val maturityTimestamp: Long = timestamp + (predictionHorizon * 1000L),
     var actualPrice: Double? = null,
     var result: String? = null // "CORRECT" | "INCORRECT" | "PENDING"

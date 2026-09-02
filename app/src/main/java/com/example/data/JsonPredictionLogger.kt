@@ -44,7 +44,7 @@ class JsonPredictionLogger(
                 writer.append(jsonStr).append("\n")
             }
         } catch (e: Exception) {
-            android.util.Log.e("QtY_JsonLogger", "Failed to write prediction to JSON: ${e.message}")
+            SafeLog.e("QtY_JsonLogger", "Failed to write prediction to JSON: ${e.message}")
         }
     }
 

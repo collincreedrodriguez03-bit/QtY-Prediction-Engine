@@ -16,7 +16,7 @@ class PredictionEngine(
     val weightBuffer: Double = 0.05,
     val thresholdUp: Double = 0.65,
     val thresholdDown: Double = 0.35,
-    val predictionHorizonSeconds: Int = 60
+    val predictionHorizonSeconds: Int = 30
 ) {
 
     /**
@@ -169,14 +169,14 @@ class PredictionEngine(
         ema: Double, rsi: Double, mom: Double, vel: Double, vol: Double, volSurge: Double, buf: Double,
         finalScore: Double, decision: String
     ): String {
-        val emaInt = (ema * 100).toInt()
-        val rsiInt = (rsi * 100).toInt()
-        val momInt = (mom * 100).toInt()
-        val velInt = (vel * 100).toInt()
-        val volInt = (vol * 100).toInt()
-        val bufInt = (buf * 100).toInt()
-        val scorePct = (finalScore * 100).toInt()
+        val emaVal = String.format(java.util.Locale.US, "%.2f", ema)
+        val rsiVal = String.format(java.util.Locale.US, "%.2f", rsi)
+        val momVal = String.format(java.util.Locale.US, "%.2f", mom)
+        val velVal = String.format(java.util.Locale.US, "%.2f", vel)
+        val volVal = String.format(java.util.Locale.US, "%.2f", vol)
+        val bufVal = String.format(java.util.Locale.US, "%.2f", buf)
+        val scoreVal = String.format(java.util.Locale.US, "%.3f", finalScore)
 
-        return "${emaInt}EMA + ${rsiInt}RSI + ${momInt}MOM + ${velInt}VEL + ${volInt}VOL + ${bufInt}BUF = ${scorePct}% -> $decision"
+        return "S(t) = 0.25·φ_EMA($emaVal) + 0.20·φ_RSI($rsiVal) + 0.20·φ_MOM($momVal) + 0.15·φ_VEL($velVal) + 0.10·φ_VOL($volVal) + 0.05·φ_BUF($bufVal) = $scoreVal ⇒ $decision"
     }
 }

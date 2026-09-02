@@ -61,7 +61,7 @@ class BtcDataFeed(
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Binance bookTicker failed: ${e.message}, trying fallback price endpoint")
+            SafeLog.w(TAG, "Binance bookTicker failed: ${e.message}, trying fallback price endpoint")
         }
 
         // Fallback to simple price endpoint
@@ -88,7 +88,7 @@ class BtcDataFeed(
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Binance price fetch error: ${e.message}")
+            SafeLog.e(TAG, "Binance price fetch error: ${e.message}")
         }
         null
     }
@@ -137,7 +137,7 @@ class BtcDataFeed(
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Kraken price fetch error: ${e.message}")
+            SafeLog.w(TAG, "Kraken price fetch error: ${e.message}")
         }
         null
     }
@@ -173,7 +173,7 @@ class BtcDataFeed(
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Bitstamp price fetch error: ${e.message}")
+            SafeLog.w(TAG, "Bitstamp price fetch error: ${e.message}")
         }
         null
     }
