@@ -73,7 +73,7 @@ fun BtcLivePredictionChart(
     }
     val decision = prediction?.decision ?: "NO-TRADE"
     val score = prediction?.score ?: 0.50
-    val horizon = prediction?.predictionHorizon ?: 30
+    val horizon = prediction?.predictionHorizon ?: 60
     val snapshot = engineState.latestSnapshot
 
     val decisionColor = when (decision) {
@@ -501,9 +501,9 @@ fun BtcLivePredictionChart(
                             isAntiAlias = true
                             typeface = android.graphics.Typeface.MONOSPACE
                         }
-                        drawText("-30s", leftPadding + 4f, h - 4f, timePaint)
+                        drawText("-60s", leftPadding + 4f, h - 4f, timePaint)
                         drawText("NOW (t)", nowX - 30f, h - 4f, timePaint.apply { color = android.graphics.Color.parseColor("#00e5ff") })
-                        drawText("+30s TARGET", targetX - 110f, h - 4f, timePaint.apply { color = if (decision == "UP") android.graphics.Color.parseColor("#00e676") else android.graphics.Color.parseColor("#ff334b") })
+                        drawText("+${horizon}s TARGET", targetX - 110f, h - 4f, timePaint.apply { color = if (decision == "UP") android.graphics.Color.parseColor("#00e676") else android.graphics.Color.parseColor("#ff334b") })
                     }
                 }
             }

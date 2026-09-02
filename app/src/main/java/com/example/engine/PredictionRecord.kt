@@ -6,17 +6,17 @@ import java.util.UUID
  * Snapshot of all indicator values computed in the 2-second cycle.
  */
 data class IndicatorSnapshot(
-    val ema9: Double,
-    val ema21: Double,
-    val rsi: Double,
-    val momentum: Double,
-    val velocity: Double,
-    val acceleration: Double,
-    val volatility: Double,
-    val volume: Double,
-    val volumeChange: Double,
-    val buffer: Double,
-    val bidAskSpread: Double,
+    val ema9: Double = 0.0,
+    val ema21: Double = 0.0,
+    val rsi: Double = 50.0,
+    val momentum: Double = 0.0,
+    val velocity: Double = 0.0,
+    val acceleration: Double = 0.0,
+    val volatility: Double = 0.0,
+    val volume: Double = 0.0,
+    val volumeChange: Double = 1.0,
+    val buffer: Double = 0.0,
+    val bidAskSpread: Double = 0.0,
     val exchangeAgreement: String = "STRONG_AGREEMENT",
     val formulaDisplay: String = ""
 )

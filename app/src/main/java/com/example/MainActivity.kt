@@ -9,8 +9,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -33,9 +31,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoGraph
-import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Functions
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sensors
@@ -48,7 +45,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -60,32 +56,28 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.engine.BacktestResult
 import com.example.engine.EngineState
-import com.example.engine.IndicatorSnapshot
+import com.example.engine.LivePerformanceStats
 import com.example.engine.PredictionRecord
 import com.example.ui.BtcLivePredictionChart
+import com.example.ui.DataConnectionsTable
+import com.example.ui.EngineRoomTab
 import com.example.ui.MainUiState
 import com.example.ui.MainViewModel
 import com.example.ui.theme.MyApplicationTheme
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.tanh
+import kotlin.math.max
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
@@ -139,15 +131,17 @@ fun QtYAppScreen(
                 onRefresh = onSingleCycle
             )
 
-            // 2 Primary Tabs: LIVE PREDICTION & BACKTEST / LOGS
+            // 3-Part Navigation Structure:
+            // 0: PREDICTION (MAIN) | 1: ENGINE ROOM | 2: BACKTEST & AUDIT
             TabRow(
-                selectedTabIndex = uiState.activeTab.coerceIn(0, 1),
+                selectedTabIndex = uiState.activeTab.coerceIn(0, 2),
                 containerColor = Color(0xFF0F172A),
                 contentColor = Color(0xFF00E5FF),
                 indicator = { tabPositions ->
-                    if (uiState.activeTab < tabPositions.size) {
+                    val curTab = uiState.activeTab.coerceIn(0, 2)
+                    if (curTab < tabPositions.size) {
                         TabRowDefaults.SecondaryIndicator(
-                            modifier = Modifier.tabIndicatorOffset(tabPositions[uiState.activeTab.coerceIn(0, 1)]),
+                            modifier = Modifier.tabIndicatorOffset(tabPositions[curTab]),
                             color = Color(0xFF00E5FF),
                             height = 3.dp
                         )
@@ -160,30 +154,43 @@ fun QtYAppScreen(
                     onClick = { onTabSelected(0) },
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Sensors, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (uiState.activeTab == 0) Color(0xFF00E5FF) else Color(0xFF64748B))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("LIVE ENGINE & GRAPH", fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 0.5.sp)
+                            Icon(Icons.Default.Sensors, contentDescription = null, modifier = Modifier.size(15.dp), tint = if (uiState.activeTab == 0) Color(0xFF00E5FF) else Color(0xFF64748B))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("MAIN", fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 0.5.sp)
                         }
                     },
-                    modifier = Modifier.testTag("tab_live_engine")
+                    modifier = Modifier.testTag("tab_main_prediction")
                 )
                 Tab(
-                    selected = uiState.activeTab == 1 || uiState.activeTab == 2,
+                    selected = uiState.activeTab == 1,
                     onClick = { onTabSelected(1) },
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.AutoGraph, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (uiState.activeTab == 1 || uiState.activeTab == 2) Color(0xFF00E5FF) else Color(0xFF64748B))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("BACKTEST & LOGS", fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 0.5.sp)
+                            Icon(Icons.Default.Memory, contentDescription = null, modifier = Modifier.size(15.dp), tint = if (uiState.activeTab == 1) Color(0xFF00E5FF) else Color(0xFF64748B))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("ENGINE ROOM", fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 0.5.sp)
                         }
                     },
-                    modifier = Modifier.testTag("tab_backtest")
+                    modifier = Modifier.testTag("tab_engine_room")
+                )
+                Tab(
+                    selected = uiState.activeTab == 2,
+                    onClick = { onTabSelected(2) },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.AutoGraph, contentDescription = null, modifier = Modifier.size(15.dp), tint = if (uiState.activeTab == 2) Color(0xFF00E5FF) else Color(0xFF64748B))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("BACKTEST", fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 0.5.sp)
+                        }
+                    },
+                    modifier = Modifier.testTag("tab_backtest_audit")
                 )
             }
 
-            // Main Tab Body
+            // Tab Body
             when (uiState.activeTab) {
-                0 -> LiveEngineTab(engineState = uiState.engineState)
+                0 -> MainPredictionTab(engineState = uiState.engineState)
+                1 -> EngineRoomTab(engineState = uiState.engineState)
                 else -> BacktestAndLogsTab(
                     uiState = uiState,
                     onRunBacktest = onRunBacktest,
@@ -207,7 +214,7 @@ fun HeaderBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -238,7 +245,7 @@ fun HeaderBar(
                         )
                     }
                     Text(
-                        text = "Real Data Engine • Cycle #${engineState.cycleCount}",
+                        text = "2s Engine • Cycle #${engineState.cycleCount}",
                         color = Color(0xFF94A3B8),
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
@@ -273,236 +280,40 @@ fun HeaderBar(
 }
 
 /**
- * Tab 0: Live Engine with Clean Dynamic BTC Live Graph and Mathematical Breakdown Box Directly Underneath.
+ * Tab 0: MAIN / PREDICTION
+ * Centered around:
+ * 1. Live Dynamic BTC Graph (Actual solid line & ~60s predicted trajectory)
+ * 2. Primary Scalp Prediction Badge & Target
+ * 3. Real Measured Live Scalp Accuracy Card
+ * 4. Factual Data Connectivity & Status Table
  */
 @Composable
-fun LiveEngineTab(engineState: EngineState) {
+fun MainPredictionTab(engineState: EngineState) {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 1. Dynamic Live BTC Graph (Where BTC is now & where QtY predicts it will move over next ~30s)
+        // 1. Centerpiece Live Graph
         item {
             BtcLivePredictionChart(engineState = engineState)
         }
 
-        // 2. Mathematical Calculation Box (Directly Underneath the Graph)
-        item {
-            MathBoxCard(engineState = engineState)
-        }
-
-        // 3. Primary Directional Scalp Prediction Card
+        // 2. Scalp Signal & Directional Prediction Card
         item {
             PredictionCard(engineState = engineState)
         }
 
-        // 4. Real-Time Indicator Matrix Grid
+        // 3. Measured Live Scalp Performance & Learning Card
         item {
-            IndicatorsGridCard(snapshot = engineState.latestSnapshot)
+            LivePerformanceCard(stats = engineState.performanceStats)
         }
 
-        // 5. Recent Predictions History Preview
+        // 4. Data Connectivity & Market Data Table
         item {
-            RecentPredictionsCard(predictions = engineState.recentPredictions)
+            DataConnectionsTable(sourceStatuses = engineState.sourceStatuses)
         }
-    }
-}
-
-/**
- * Mathematical Calculation Box showing Quantitative Formulation,
- * Vector Dot Product, Activation Functions, and Decision Boundaries.
- */
-@Composable
-fun MathBoxCard(engineState: EngineState) {
-    val snapshot = engineState.latestSnapshot
-    val prediction = engineState.latestPrediction
-    val currentPrice = if (engineState.latestPrice > 0.0) engineState.latestPrice else 91250.0
-    val score = prediction?.score ?: 0.50
-    val horizon = prediction?.predictionHorizon ?: 30
-    val decision = prediction?.decision ?: "NO-TRADE"
-
-    // Compute actual mathematical factor activations phi_i
-    val phiEma = if (snapshot != null && currentPrice > 0) {
-        val diff = snapshot.ema9 - snapshot.ema21
-        val pct = (diff / currentPrice) * 1000.0
-        (0.5 + (tanh(pct) * 0.5)).coerceIn(0.0, 1.0)
-    } else 0.50
-
-    val phiRsi = if (snapshot != null) (snapshot.rsi / 100.0).coerceIn(0.0, 1.0) else 0.50
-
-    val phiMom = if (snapshot != null && currentPrice > 0) {
-        val scaled = snapshot.momentum / (currentPrice * 0.0008)
-        (0.5 + (tanh(scaled) * 0.5)).coerceIn(0.0, 1.0)
-    } else 0.50
-
-    val phiVel = if (snapshot != null && currentPrice > 0) {
-        val scaled = snapshot.velocity / (currentPrice * 0.0003)
-        (0.5 + (tanh(scaled) * 0.5)).coerceIn(0.0, 1.0)
-    } else 0.50
-
-    val phiVol = if (snapshot != null && currentPrice > 0) {
-        val volPct = (snapshot.volatility / currentPrice) * 100.0
-        val volMultiplier = (tanh(volPct * 5.0) * 0.5)
-        (0.5 + (phiEma - 0.5) * volMultiplier * 2.0).coerceIn(0.0, 1.0)
-    } else 0.50
-
-    val phiBuf = if (snapshot != null && currentPrice > 0) {
-        val scaled = snapshot.buffer / (currentPrice * 0.005)
-        (0.5 + (tanh(scaled) * 0.5)).coerceIn(0.0, 1.0)
-    } else 0.50
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF0A101D)),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.6f), RoundedCornerShape(16.dp))
-            .testTag("mathematics_box")
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Functions,
-                        contentDescription = "Math Formulation",
-                        tint = Color(0xFF00E5FF),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "QUANTITATIVE SCALPING FORMULATION",
-                        color = Color(0xFF00E5FF),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 0.8.sp
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color(0xFF1E293B))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "Δt = 2.0s • H = ${horizon}s",
-                        color = Color(0xFF38BDF8),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Mathematical Equations Blackboard
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF04070D))
-                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(10.dp))
-                    .padding(12.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // Line 1: Vector Model
-                    Text(
-                        text = "1. Model:  S(t) = σ ( w⃗ · φ⃗(X_t) ) + δ_agreement",
-                        color = Color(0xFF38BDF8),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    // Line 2: Active Numeric Vector Dot Product
-                    val dotProductStr = String.format(
-                        Locale.US,
-                        "2. Active: S(t) = 0.25(%.2f) + 0.20(%.2f) + 0.20(%.2f) + 0.15(%.2f) + 0.10(%.2f) + 0.05(%.2f)",
-                        phiEma, phiRsi, phiMom, phiVel, phiVol, phiBuf
-                    )
-                    Text(
-                        text = dotProductStr,
-                        color = Color(0xFFE2E8F0),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
-                    // Line 3: Evaluated Score & Forecast Equation
-                    val evalScoreStr = String.format(
-                        Locale.US,
-                        "3. Output: S(t) = %.3f  ⇒  P̂(t+%ds) = P_t · [ 1 + (S(t) - 0.50) · 0.00075 ]",
-                        score, horizon
-                    )
-                    Text(
-                        text = evalScoreStr,
-                        color = Color(0xFFF1F5F9),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    // Line 4: Decision Hypothesis
-                    val decColor = if (decision == "UP") "#00E676" else if (decision == "DOWN") "#FF334B" else "#94A3B8"
-                    Text(
-                        text = "4. Decision: if S(t) ≥ 0.65 ⇒ UP  |  if S(t) ≤ 0.35 ⇒ DOWN  [ CURRENT: $decision ]",
-                        color = Color(if (decision == "UP") 0xFF00E676 else if (decision == "DOWN") 0xFFFF334B else 0xFF94A3B8),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Black
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Factor Vector Matrix Chips
-            Text(
-                text = "ACTIVE VECTOR COEFFICIENTS & ACTIVATIONS (φ_i)",
-                color = Color(0xFF64748B),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.5.sp
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                MathFactorChip("φ_EMA", "25%", String.format(Locale.US, "%.2f", phiEma))
-                MathFactorChip("φ_RSI", "20%", String.format(Locale.US, "%.2f", phiRsi))
-                MathFactorChip("φ_MOM", "20%", String.format(Locale.US, "%.2f", phiMom))
-                MathFactorChip("φ_VEL", "15%", String.format(Locale.US, "%.2f", phiVel))
-                MathFactorChip("φ_VOL", "10%", String.format(Locale.US, "%.2f", phiVol))
-                MathFactorChip("φ_BUF", "5%", String.format(Locale.US, "%.2f", phiBuf))
-            }
-        }
-    }
-}
-
-@Composable
-fun MathFactorChip(name: String, weight: String, activation: String) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(Color(0xFF131D31))
-            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(6.dp))
-            .padding(horizontal = 6.dp, vertical = 4.dp)
-    ) {
-        Text(text = name, color = Color(0xFF38BDF8), fontSize = 9.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-        Text(text = weight, color = Color(0xFF64748B), fontSize = 8.sp, fontWeight = FontWeight.Bold)
-        Text(text = activation, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
     }
 }
 
@@ -511,7 +322,7 @@ fun PredictionCard(engineState: EngineState) {
     val pred = engineState.latestPrediction
     val decision = pred?.decision ?: "NO-TRADE"
     val score = pred?.score ?: 0.50
-    val horizon = pred?.predictionHorizon ?: 30
+    val horizon = pred?.predictionHorizon ?: 60
     val decisionColor = when (decision) {
         "UP" -> Color(0xFF00E676)
         "DOWN" -> Color(0xFFFF334B)
@@ -521,7 +332,10 @@ fun PredictionCard(engineState: EngineState) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
         shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth().testTag("prediction_card")
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
+            .testTag("prediction_card")
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -621,110 +435,125 @@ fun PredictionCard(engineState: EngineState) {
 }
 
 @Composable
-fun IndicatorsGridCard(snapshot: IndicatorSnapshot?) {
+fun LivePerformanceCard(stats: LivePerformanceStats) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
         shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth().testTag("indicators_grid_card")
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
+            .testTag("live_performance_card")
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "REAL-TIME INDICATOR METRICS",
-                color = Color(0xFF94A3B8),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp
-            )
+            // Header with Market Regime
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.AutoGraph,
+                        contentDescription = "Performance",
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "MEASURED LIVE SCALP ACCURACY",
+                        color = Color(0xFF00E5FF),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 0.8.sp
+                    )
+                }
+
+                val regimeColor = when (stats.marketRegime) {
+                    "HIGH VOLATILITY" -> Color(0xFFFF9100)
+                    "TRENDING BULL" -> Color(0xFF00E676)
+                    "TRENDING BEAR" -> Color(0xFFFF334B)
+                    else -> Color(0xFF38BDF8)
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(regimeColor.copy(alpha = 0.15f))
+                        .border(1.dp, regimeColor.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = stats.marketRegime,
+                        color = regimeColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(modifier = Modifier.fillMaxWidth()) {
-                IndicatorCell("EMA 9", String.format(Locale.US, "%.1f", snapshot?.ema9 ?: 0.0), Modifier.weight(1f))
-                IndicatorCell("EMA 21", String.format(Locale.US, "%.1f", snapshot?.ema21 ?: 0.0), Modifier.weight(1f))
-                IndicatorCell("RSI (14)", String.format(Locale.US, "%.1f", snapshot?.rsi ?: 50.0), Modifier.weight(1f))
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(modifier = Modifier.fillMaxWidth()) {
-                IndicatorCell("Momentum (5)", String.format(Locale.US, "%+.1f", snapshot?.momentum ?: 0.0), Modifier.weight(1f))
-                IndicatorCell("Velocity", String.format(Locale.US, "%+.2f/s", snapshot?.velocity ?: 0.0), Modifier.weight(1f))
-                IndicatorCell("Acceleration", String.format(Locale.US, "%+.2f/s²", snapshot?.acceleration ?: 0.0), Modifier.weight(1f))
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(modifier = Modifier.fillMaxWidth()) {
-                IndicatorCell("Volatility (10)", String.format(Locale.US, "%.2f", snapshot?.volatility ?: 0.0), Modifier.weight(1f))
-                IndicatorCell("Vol Surge", String.format(Locale.US, "%.2fx", snapshot?.volumeChange ?: 1.0), Modifier.weight(1f))
-                IndicatorCell("Buffer", String.format(Locale.US, "%+.1f", snapshot?.buffer ?: 0.0), Modifier.weight(1f))
-            }
-        }
-    }
-}
-
-@Composable
-fun IndicatorCell(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .padding(4.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF090E17))
-            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(8.dp))
-            .padding(8.dp)
-    ) {
-        Text(text = label, color = Color(0xFF64748B), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(modifier = Modifier.height(3.dp))
-        Text(text = value, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-    }
-}
-
-@Composable
-fun RecentPredictionsCard(predictions: List<PredictionRecord>) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth().testTag("recent_predictions_card")
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "RECENT PREDICTIONS HISTORY (${predictions.size})",
-                color = Color(0xFF94A3B8),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            if (predictions.isEmpty()) {
-                Text(
-                    text = "Awaiting initial engine cycles...",
-                    color = Color(0xFF64748B),
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-            } else {
-                predictions.takeLast(5).reversed().forEach { rec ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(rec.timestamp))
-                        Text(text = timeStr, color = Color(0xFF64748B), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                        Text(text = "$${String.format(Locale.US, "%,.1f", rec.currentPrice)}", color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-
-                        val decColor = when (rec.decision) {
-                            "UP" -> Color(0xFF00E676)
-                            "DOWN" -> Color(0xFFFF334B)
-                            else -> Color(0xFF94A3B8)
-                        }
-                        Text(text = rec.decision, color = decColor, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                        Text(text = "${(rec.score * 100).toInt()}%", color = Color(0xFF38BDF8), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            // Primary Win Rate & Stat Matrix
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "MEASURED WIN RATE",
+                        color = Color(0xFF64748B),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                    if (stats.totalResolved > 0) {
+                        val wrColor = if (stats.winRatePercent >= 75.0) Color(0xFF00E676) else if (stats.winRatePercent >= 50.0) Color(0xFF38BDF8) else Color(0xFFFFD600)
+                        Text(
+                            text = "${stats.winRatePercent}%",
+                            color = wrColor,
+                            fontSize = 32.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    } else {
+                        Text(
+                            text = "RESOLVING...",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "Awaiting maturity (${stats.pendingCount} pending)",
+                            color = Color(0xFF64748B),
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
+                }
+
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "Resolved: ${stats.totalResolved} / ${stats.totalPredictions}",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Correct: ${stats.correctCount}  •  Incorrect: ${stats.incorrectCount}",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "UP: ${stats.upWinRatePercent}% (${stats.totalUpTrades}) | DN: ${stats.downWinRatePercent}% (${stats.totalDownTrades})",
+                        color = Color(0xFF38BDF8),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
                 }
             }
         }
@@ -732,7 +561,8 @@ fun RecentPredictionsCard(predictions: List<PredictionRecord>) {
 }
 
 /**
- * Tab 1: CCXT Backtest Evaluation & Structured JSON Logs
+ * Tab 2: BACKTEST & AUDIT
+ * Houses CCXT Replay Engine, Empirical Factor Attribution Matrix, Resolution History, and JSON Log Export.
  */
 @Composable
 fun BacktestAndLogsTab(
@@ -740,12 +570,15 @@ fun BacktestAndLogsTab(
     onRunBacktest: () -> Unit,
     onCopyJson: () -> Unit
 ) {
+    val stats = uiState.engineState.performanceStats
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // 1. CCXT Backtest Trigger Button
         item {
             Button(
                 onClick = onRunBacktest,
@@ -767,16 +600,20 @@ fun BacktestAndLogsTab(
             }
         }
 
+        // 2. Backtest Evaluation Results (if available)
         if (uiState.backtestResult != null) {
             item {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
                     shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("backtest_metrics_card")
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
+                        .testTag("backtest_metrics_card")
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "BACKTEST EVALUATION METRICS (30s HORIZON)",
+                            text = "BACKTEST EVALUATION METRICS (60s HORIZON)",
                             color = Color(0xFF94A3B8),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -842,7 +679,7 @@ fun BacktestAndLogsTab(
                     ) {
                         Column {
                             Text(text = "Entry: $${String.format(Locale.US, "%,.1f", sample.currentPrice)} -> Pred: $${String.format(Locale.US, "%,.1f", sample.predictedPrice)}", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                            Text(text = "Actual 30s: $${String.format(Locale.US, "%,.1f", sample.actualPrice ?: 0.0)}", color = Color(0xFF94A3B8), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                            Text(text = "Actual: $${String.format(Locale.US, "%,.1f", sample.actualPrice ?: 0.0)}", color = Color(0xFF94A3B8), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                         }
 
                         val resColor = when (sample.result) {
@@ -859,12 +696,79 @@ fun BacktestAndLogsTab(
             }
         }
 
-        // Structured JSON Logs Card
+        // 3. Empirical Factor Attribution Card
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
                 shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
+                    .testTag("factor_attribution_card")
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "EMPIRICAL FACTOR ATTRIBUTION & CALIBRATION",
+                        color = Color(0xFF00E5FF),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 0.8.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    if (stats.factorAttributions.isEmpty()) {
+                        Text(
+                            text = "Calibrating empirical factor matrix with live data...",
+                            color = Color(0xFF64748B),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    } else {
+                        stats.factorAttributions.forEach { factor ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 3.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = factor.factorName,
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = "Active: ${factor.totalTimesActive} • Win: ${factor.winRate}%",
+                                    color = if (factor.winRate >= 60.0) Color(0xFF00E676) else Color(0xFF94A3B8),
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                val offsetStr = String.format(Locale.US, "%+.2f", factor.suggestedWeightOffset)
+                                Text(
+                                    text = "Δw: $offsetStr",
+                                    color = Color(0xFF38BDF8),
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Structured JSON Logs Card
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(

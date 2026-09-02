@@ -49,6 +49,16 @@ class JsonPredictionLogger(
     }
 
     @Synchronized
+    fun updateResolvedRecord(predictionId: String, actualPrice: Double, result: String) {
+        val index = memoryLog.indexOfFirst { it.predictionId == predictionId }
+        if (index != -1) {
+            val rec = memoryLog[index]
+            rec.actualPrice = actualPrice
+            rec.result = result
+        }
+    }
+
+    @Synchronized
     fun getRecentPredictions(limit: Int = 10): List<PredictionRecord> {
         return memoryLog.takeLast(limit)
     }

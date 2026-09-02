@@ -22,12 +22,12 @@ data class BacktestResult(
  */
 class Backtester(
     private val indicatorCalculator: IndicatorCalculator = IndicatorCalculator(),
-    private val predictionEngine: PredictionEngine = PredictionEngine(predictionHorizonSeconds = 30)
+    private val predictionEngine: PredictionEngine = PredictionEngine(predictionHorizonSeconds = 60)
 ) {
 
     /**
      * Replays a list of sequential chronological PricePoints (e.g. at ~2s intervals)
-     * and evaluates prediction accuracy against actual 30-second forward prices.
+     * and evaluates prediction accuracy against actual 60-second forward prices.
      */
     fun runBacktest(prices: List<PricePoint>): BacktestResult {
         if (prices.size < 40) {
@@ -55,7 +55,7 @@ class Backtester(
         var correctCount = 0
         var incorrectCount = 0
 
-        val horizonSteps = 15 // 15 steps * 2s = 30s horizon
+        val horizonSteps = 30 // 30 steps * 2s = 60s horizon
 
         for (i in prices.indices) {
             val point = prices[i]

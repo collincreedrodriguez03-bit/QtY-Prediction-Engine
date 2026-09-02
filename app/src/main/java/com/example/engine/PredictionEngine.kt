@@ -16,7 +16,7 @@ class PredictionEngine(
     val weightBuffer: Double = 0.05,
     val thresholdUp: Double = 0.65,
     val thresholdDown: Double = 0.35,
-    val predictionHorizonSeconds: Int = 30
+    val predictionHorizonSeconds: Int = 60
 ) {
 
     /**
@@ -89,11 +89,14 @@ class PredictionEngine(
 
     /**
      * Generates a prediction from the current IndicatorSnapshot and market price.
+     * Incorporates Phase 4 adaptive factor offsets and empirical learning bias.
      */
     fun predict(
         currentPrice: Double,
         snapshot: IndicatorSnapshot,
-        timestamp: Long = System.currentTimeMillis()
+        timestamp: Long = System.currentTimeMillis(),
+        learningBias: Double = 0.0,
+        factorOffsets: Map<String, Double> = emptyMap()
     ): PredictionRecord {
         val emaSignal = normalizeEmaSignal(currentPrice, snapshot.ema9, snapshot.ema21)
         val rsiSignal = normalizeRsiSignal(snapshot.rsi)
@@ -103,16 +106,33 @@ class PredictionEngine(
         val volumeSignal = normalizeVolumeSignal(snapshot.volumeChange, snapshot.momentum)
         val bufSignal = normalizeBufferSignal(snapshot.buffer, currentPrice)
 
+        // Effective weights adjusted by empirical learning feedback (normalized)
+        val effEma = (weightEma + (factorOffsets["EMA"] ?: 0.0)).coerceAtLeast(0.05)
+        val effRsi = (weightRsi + (factorOffsets["RSI"] ?: 0.0)).coerceAtLeast(0.05)
+        val effMom = (weightMomentum + (factorOffsets["MOMENTUM"] ?: 0.0)).coerceAtLeast(0.05)
+        val effVel = (weightVelocity + (factorOffsets["VELOCITY"] ?: 0.0)).coerceAtLeast(0.05)
+        val effVol = (weightVol + (factorOffsets["VOLATILITY"] ?: 0.0)).coerceAtLeast(0.02)
+        val effBuf = (weightBuffer + (factorOffsets["BUFFER"] ?: 0.0)).coerceAtLeast(0.02)
+        val totalW = effEma + effRsi + effMom + effVel + effVol + weightVolume + effBuf
+
+        val normEma = effEma / totalW
+        val normRsi = effRsi / totalW
+        val normMom = effMom / totalW
+        val normVel = effVel / totalW
+        val normVol = effVol / totalW
+        val normBuf = effBuf / totalW
+        val normVolume = weightVolume / totalW
+
         // Raw weighted combination
         val rawScore = (
-            emaSignal * weightEma +
-            rsiSignal * weightRsi +
-            momSignal * weightMomentum +
-            velSignal * weightVelocity +
-            volSignal * weightVol +
-            volumeSignal * weightVolume +
-            bufSignal * weightBuffer
-        )
+            emaSignal * normEma +
+            rsiSignal * normRsi +
+            momSignal * normMom +
+            velSignal * normVel +
+            volSignal * normVol +
+            volumeSignal * normVolume +
+            bufSignal * normBuf
+        ) + learningBias
 
         // Exchange agreement confidence adjustment
         val agreementAdjustment = when (snapshot.exchangeAgreement) {
@@ -140,13 +160,14 @@ class PredictionEngine(
             else -> "WEAK"
         }
 
-        // Calculate expected price movement over horizon (60s)
+        // Calculate expected price movement over horizon (30s)
         val expectedMoveRatio = (adjustedScore - 0.5) * 0.0015 * (predictionHorizonSeconds / 60.0)
         val predictedPrice = currentPrice * (1.0 + expectedMoveRatio)
 
         // Generate visual mathematics display
         val mathFormula = buildMathDisplay(
             emaSignal, rsiSignal, momSignal, velSignal, volSignal, volumeSignal, bufSignal,
+            normEma, normRsi, normMom, normVel, normVol, normBuf,
             adjustedScore, decision
         )
 
@@ -167,6 +188,7 @@ class PredictionEngine(
 
     private fun buildMathDisplay(
         ema: Double, rsi: Double, mom: Double, vel: Double, vol: Double, volSurge: Double, buf: Double,
+        wEma: Double, wRsi: Double, wMom: Double, wVel: Double, wVol: Double, wBuf: Double,
         finalScore: Double, decision: String
     ): String {
         val emaVal = String.format(java.util.Locale.US, "%.2f", ema)
@@ -177,6 +199,13 @@ class PredictionEngine(
         val bufVal = String.format(java.util.Locale.US, "%.2f", buf)
         val scoreVal = String.format(java.util.Locale.US, "%.3f", finalScore)
 
-        return "S(t) = 0.25·φ_EMA($emaVal) + 0.20·φ_RSI($rsiVal) + 0.20·φ_MOM($momVal) + 0.15·φ_VEL($velVal) + 0.10·φ_VOL($volVal) + 0.05·φ_BUF($bufVal) = $scoreVal ⇒ $decision"
+        val wE = String.format(java.util.Locale.US, "%.2f", wEma)
+        val wR = String.format(java.util.Locale.US, "%.2f", wRsi)
+        val wM = String.format(java.util.Locale.US, "%.2f", wMom)
+        val wV = String.format(java.util.Locale.US, "%.2f", wVel)
+        val wVo = String.format(java.util.Locale.US, "%.2f", wVol)
+        val wB = String.format(java.util.Locale.US, "%.2f", wBuf)
+
+        return "S(t) = $wE·φ_EMA($emaVal) + $wR·φ_RSI($rsiVal) + $wM·φ_MOM($momVal) + $wV·φ_VEL($velVal) + $wVo·φ_VOL($volVal) + $wB·φ_BUF($bufVal) = $scoreVal ⇒ $decision"
     }
 }
