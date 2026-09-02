@@ -35,6 +35,7 @@ data class PredictionRecord(
     val currentPrice: Double = predictedPrice,
     val predictionHorizon: Int = 30, // seconds
     val maturityTimestamp: Long = timestamp + (predictionHorizon * 1000L),
+    val calibratedScore: Double? = null,
     var actualPrice: Double? = null,
     var result: String? = null // "CORRECT" | "INCORRECT" | "PENDING"
 )

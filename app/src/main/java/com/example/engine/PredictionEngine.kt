@@ -89,7 +89,8 @@ class PredictionEngine(
 
     /**
      * Generates a prediction from the current IndicatorSnapshot and market price.
-     * Incorporates Phase 4 adaptive factor offsets and empirical learning bias.
+     * Uses frozen validated v1 baseline weights.
+     * Records prospective calibrated factor offsets and v2 advisory score for parallel evaluation.
      */
     fun predict(
         currentPrice: Double,
@@ -106,24 +107,17 @@ class PredictionEngine(
         val volumeSignal = normalizeVolumeSignal(snapshot.volumeChange, snapshot.momentum)
         val bufSignal = normalizeBufferSignal(snapshot.buffer, currentPrice)
 
-        // Effective weights adjusted by empirical learning feedback (normalized)
-        val effEma = (weightEma + (factorOffsets["EMA"] ?: 0.0)).coerceAtLeast(0.05)
-        val effRsi = (weightRsi + (factorOffsets["RSI"] ?: 0.0)).coerceAtLeast(0.05)
-        val effMom = (weightMomentum + (factorOffsets["MOMENTUM"] ?: 0.0)).coerceAtLeast(0.05)
-        val effVel = (weightVelocity + (factorOffsets["VELOCITY"] ?: 0.0)).coerceAtLeast(0.05)
-        val effVol = (weightVol + (factorOffsets["VOLATILITY"] ?: 0.0)).coerceAtLeast(0.02)
-        val effBuf = (weightBuffer + (factorOffsets["BUFFER"] ?: 0.0)).coerceAtLeast(0.02)
-        val totalW = effEma + effRsi + effMom + effVel + effVol + weightVolume + effBuf
+        // 1. Frozen Validated v1 Base Weights (MANDATORY: Never altered during prospective testing)
+        val totalBaseW = weightEma + weightRsi + weightMomentum + weightVelocity + weightVol + weightVolume + weightBuffer
+        val normEma = weightEma / totalBaseW
+        val normRsi = weightRsi / totalBaseW
+        val normMom = weightMomentum / totalBaseW
+        val normVel = weightVelocity / totalBaseW
+        val normVol = weightVol / totalBaseW
+        val normBuf = weightBuffer / totalBaseW
+        val normVolume = weightVolume / totalBaseW
 
-        val normEma = effEma / totalW
-        val normRsi = effRsi / totalW
-        val normMom = effMom / totalW
-        val normVel = effVel / totalW
-        val normVol = effVol / totalW
-        val normBuf = effBuf / totalW
-        val normVolume = weightVolume / totalW
-
-        // Raw weighted combination
+        // Raw weighted combination for v1 (Frozen)
         val rawScore = (
             emaSignal * normEma +
             rsiSignal * normRsi +
@@ -132,6 +126,25 @@ class PredictionEngine(
             volSignal * normVol +
             volumeSignal * normVolume +
             bufSignal * normBuf
+        )
+
+        // 2. Calibrated v2 Weights (Recorded in parallel for side-by-side comparison)
+        val effEma = (weightEma + (factorOffsets["EMA"] ?: 0.0)).coerceAtLeast(0.05)
+        val effRsi = (weightRsi + (factorOffsets["RSI"] ?: 0.0)).coerceAtLeast(0.05)
+        val effMom = (weightMomentum + (factorOffsets["MOMENTUM"] ?: 0.0)).coerceAtLeast(0.05)
+        val effVel = (weightVelocity + (factorOffsets["VELOCITY"] ?: 0.0)).coerceAtLeast(0.05)
+        val effVol = (weightVol + (factorOffsets["VOLATILITY"] ?: 0.0)).coerceAtLeast(0.02)
+        val effBuf = (weightBuffer + (factorOffsets["BUFFER"] ?: 0.0)).coerceAtLeast(0.02)
+        val totalCalW = effEma + effRsi + effMom + effVel + effVol + weightVolume + effBuf
+
+        val calScore = (
+            emaSignal * (effEma / totalCalW) +
+            rsiSignal * (effRsi / totalCalW) +
+            momSignal * (effMom / totalCalW) +
+            velSignal * (effVel / totalCalW) +
+            volSignal * (effVol / totalCalW) +
+            volumeSignal * (weightVolume / totalCalW) +
+            bufSignal * (effBuf / totalCalW)
         ) + learningBias
 
         // Exchange agreement confidence adjustment
@@ -182,7 +195,8 @@ class PredictionEngine(
             predictedPrice = Math.round(predictedPrice * 100.0) / 100.0,
             currentPrice = Math.round(currentPrice * 100.0) / 100.0,
             predictionHorizon = predictionHorizonSeconds,
-            maturityTimestamp = timestamp + (predictionHorizonSeconds * 1000L)
+            maturityTimestamp = timestamp + (predictionHorizonSeconds * 1000L),
+            calibratedScore = Math.round(calScore.coerceIn(0.0, 1.0) * 1000.0) / 1000.0
         )
     }
 

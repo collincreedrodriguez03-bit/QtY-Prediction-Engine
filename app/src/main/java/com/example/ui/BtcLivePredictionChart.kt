@@ -51,13 +51,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.EngineState
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Dynamic, High-Engagement Live BTC Graph showing Current Market Price,
- * 30-Second Rolling Trajectory, Animated Trajectory Flow, and Live Math Target.
+ * Dynamic Live 30-Second BTC Prediction Graph showing Current Market Price,
+ * Exact Live Timestamp, 30-Second Target Timer, and Predicted Trajectory.
  */
 @Composable
 fun BtcLivePredictionChart(
@@ -82,6 +84,12 @@ fun BtcLivePredictionChart(
         else -> Color(0xFF38BDF8)
     }
 
+    val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
+    val nowMs = if (engineState.latestTimestamp > 0) engineState.latestTimestamp else System.currentTimeMillis()
+    val targetMs = nowMs + (horizon * 1000L)
+    val nowTimeStr = timeFormat.format(Date(nowMs))
+    val targetTimeStr = timeFormat.format(Date(targetMs))
+
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF0B1324)),
         shape = RoundedCornerShape(14.dp),
@@ -93,9 +101,9 @@ fun BtcLivePredictionChart(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp)
+                .padding(12.dp)
         ) {
-            // Header Row: BTC Spot Feed info
+            // Header Row: BTC Spot Feed info + 30s Prediction Horizon Badge
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -104,7 +112,7 @@ fun BtcLivePredictionChart(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(9.dp)
+                            .size(8.dp)
                             .clip(CircleShape)
                             .background(if (engineState.isRunning) Color(0xFF00E676) else Color(0xFFFF5252))
                     )
@@ -112,96 +120,155 @@ fun BtcLivePredictionChart(
                     Text(
                         text = "BTC / USDT",
                         color = Color.White,
-                        fontSize = 14.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.sp
+                        maxLines = 1
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "• ${engineState.latestExchange}",
                         color = Color(0xFF64748B),
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1
                     )
                 }
 
-                // Clean 30s Target Delta Indicator
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // 30s Horizon & Score Badge (Single Line)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(decisionColor.copy(alpha = 0.12f))
+                        .border(1.dp, decisionColor.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
                     Text(
-                        text = "+30s TARGET: ",
-                        color = Color(0xFF64748B),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Text(
-                        text = "$${String.format(Locale.US, "%,.1f", predictedPrice)}",
+                        text = "30s FORECAST • ${if (score > 0.0) String.format(Locale.US, "SCORE %.2f", score) else "NO DATA"}",
                         color = decisionColor,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // Current Price & +30s Target Delta
+            // Price & Time Row: All CURRENT on the LEFT, all PREDICTION on the RIGHT
+            val priceDelta = predictedPrice - currentPrice
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Bottom
             ) {
-                Column {
+                // LEFT SIDE: All Current Price & Current Time
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "LIVE SPOT PRICE (t)",
                         color = Color(0xFF64748B),
-                        fontSize = 10.sp,
+                        fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp
+                        letterSpacing = 0.5.sp,
+                        maxLines = 1
                     )
                     Text(
                         text = "$${String.format(Locale.US, "%,.2f", currentPrice)}",
                         color = Color.White,
-                        fontSize = 24.sp,
+                        fontSize = 22.sp,
                         fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        softWrap = false
                     )
-                }
-
-                val priceDelta = predictedPrice - currentPrice
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "30s PROJECTED DELTA",
-                        color = Color(0xFF64748B),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp
-                    )
+                    Spacer(modifier = Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "${if (priceDelta >= 0) "+" else ""}$${String.format(Locale.US, "%.2f", priceDelta)}",
-                            color = decisionColor,
-                            fontSize = 18.sp,
+                            text = "TIME (t): ",
+                            color = Color(0xFF64748B),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = nowTimeStr,
+                            color = Color(0xFF00E5FF),
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // RIGHT SIDE: All Prediction Price, Delta & Target Time
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.End
+                ) {
+                    Text(
+                        text = "30s TARGET & DELTA",
+                        color = Color(0xFF64748B),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        maxLines = 1
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Text(
+                            text = "$${String.format(Locale.US, "%,.2f", predictedPrice)}",
+                            color = decisionColor,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            softWrap = false
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "($decision)",
-                            color = decisionColor.copy(alpha = 0.9f),
+                            text = "${if (priceDelta >= 0) "+" else ""}${String.format(Locale.US, "%.1f", priceDelta)}",
+                            color = decisionColor.copy(alpha = 0.85f),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Text(
+                            text = "TARGET (t+30s): ",
+                            color = Color(0xFF64748B),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = "$targetTimeStr ($decision)",
+                            color = decisionColor,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Live Chart Canvas with Real-Time Animated Flow
             Box(

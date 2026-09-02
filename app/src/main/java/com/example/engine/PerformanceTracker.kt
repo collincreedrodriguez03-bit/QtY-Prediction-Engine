@@ -16,11 +16,28 @@ data class FactorAttribution(
 )
 
 data class LivePerformanceStats(
-    val totalPredictions: Int = 0,
-    val totalResolved: Int = 0,
-    val correctCount: Int = 0,
-    val incorrectCount: Int = 0,
-    val winRatePercent: Double = 0.0,
+    // 1. Operational Streaming Metrics (Complete continuous 2s execution stream)
+    val operationalPredictionCount: Int = 0,
+    val operationalResolvedCount: Int = 0,
+    val operationalCorrectCount: Int = 0,
+    val operationalIncorrectCount: Int = 0,
+    val operationalWinRatePercent: Double = 0.0,
+
+    // 2. Statistical Non-Overlapping 30s Evaluation Stream (T, T+30s, T+60s, ...)
+    val statisticalEvaluationCount: Int = 0,
+    val statisticalCorrectCount: Int = 0,
+    val statisticalIncorrectCount: Int = 0,
+    val statisticalWinRatePercent: Double = 0.0,
+    val baselineAlwaysUpWinRate: Double = 0.0,
+    val baselineAlwaysDownWinRate: Double = 0.0,
+
+    // Backward-compatible accessors for existing UI bindings
+    val totalPredictions: Int = operationalPredictionCount,
+    val totalResolved: Int = operationalResolvedCount,
+    val correctCount: Int = operationalCorrectCount,
+    val incorrectCount: Int = operationalIncorrectCount,
+    val winRatePercent: Double = operationalWinRatePercent,
+
     val upWinRatePercent: Double = 0.0,
     val downWinRatePercent: Double = 0.0,
     val totalUpTrades: Int = 0,
@@ -106,19 +123,52 @@ class PerformanceTracker {
 
     /**
      * Computes verified, real-time performance statistics from authentic resolved predictions.
-     * Never fabricates numbers — returns 0.0% if no resolved trades exist yet.
+     * Evaluates both the continuous operational stream and a dedicated non-overlapping 30s evaluation stream.
      */
     @Synchronized
     fun computeStats(currentSnapshot: IndicatorSnapshot?): LivePerformanceStats {
         val validTrades = resolvedPredictions.filter { it.decision == "UP" || it.decision == "DOWN" }
-        val correct = validTrades.count { it.result == "CORRECT" }
-        val incorrect = validTrades.count { it.result == "INCORRECT" }
+        val opCorrect = validTrades.count { it.result == "CORRECT" }
+        val opIncorrect = validTrades.count { it.result == "INCORRECT" }
 
-        val winRate = if (validTrades.isNotEmpty()) {
-            ((correct.toDouble() / validTrades.size) * 1000.0).roundToInt() / 10.0
+        val opWinRate = if (validTrades.isNotEmpty()) {
+            ((opCorrect.toDouble() / validTrades.size) * 1000.0).roundToInt() / 10.0
         } else {
             0.0
         }
+
+        // Dedicated Non-Overlapping 30s Evaluation Stream (T, T+30s, T+60s, ...)
+        // Filters trades that are spaced by at least 30 seconds (30,000ms) from the prior evaluation sample
+        val nonOverlappingTrades = mutableListOf<PredictionRecord>()
+        var lastEvaluatedTimestamp = 0L
+        val sortedTrades = validTrades.sortedBy { it.timestamp }
+        for (trade in sortedTrades) {
+            if (trade.timestamp - lastEvaluatedTimestamp >= 30_000L) {
+                nonOverlappingTrades.add(trade)
+                lastEvaluatedTimestamp = trade.timestamp
+            }
+        }
+
+        val statCorrect = nonOverlappingTrades.count { it.result == "CORRECT" }
+        val statIncorrect = nonOverlappingTrades.count { it.result == "INCORRECT" }
+        val statWinRate = if (nonOverlappingTrades.isNotEmpty()) {
+            ((statCorrect.toDouble() / nonOverlappingTrades.size) * 1000.0).roundToInt() / 10.0
+        } else 0.0
+
+        // Benchmark Baselines using the exact same eligible non-overlapping evaluation samples
+        var baseUpWins = 0
+        var baseDownWins = 0
+        for (trade in nonOverlappingTrades) {
+            val delta = (trade.actualPrice ?: trade.currentPrice) - trade.currentPrice
+            if (delta > 0.0) baseUpWins++
+            if (delta < 0.0) baseDownWins++
+        }
+        val baseUpRate = if (nonOverlappingTrades.isNotEmpty()) {
+            ((baseUpWins.toDouble() / nonOverlappingTrades.size) * 1000.0).roundToInt() / 10.0
+        } else 0.0
+        val baseDownRate = if (nonOverlappingTrades.isNotEmpty()) {
+            ((baseDownWins.toDouble() / nonOverlappingTrades.size) * 1000.0).roundToInt() / 10.0
+        } else 0.0
 
         val upTrades = validTrades.filter { it.decision == "UP" }
         val upCorrect = upTrades.count { it.result == "CORRECT" }
@@ -151,11 +201,17 @@ class PerformanceTracker {
         } else 0.0
 
         return LivePerformanceStats(
-            totalPredictions = pendingPredictions.size + resolvedPredictions.size,
-            totalResolved = validTrades.size,
-            correctCount = correct,
-            incorrectCount = incorrect,
-            winRatePercent = winRate,
+            operationalPredictionCount = pendingPredictions.size + resolvedPredictions.size,
+            operationalResolvedCount = validTrades.size,
+            operationalCorrectCount = opCorrect,
+            operationalIncorrectCount = opIncorrect,
+            operationalWinRatePercent = opWinRate,
+            statisticalEvaluationCount = nonOverlappingTrades.size,
+            statisticalCorrectCount = statCorrect,
+            statisticalIncorrectCount = statIncorrect,
+            statisticalWinRatePercent = statWinRate,
+            baselineAlwaysUpWinRate = baseUpRate,
+            baselineAlwaysDownWinRate = baseDownRate,
             upWinRatePercent = upWinRate,
             downWinRatePercent = downWinRate,
             totalUpTrades = upTrades.size,

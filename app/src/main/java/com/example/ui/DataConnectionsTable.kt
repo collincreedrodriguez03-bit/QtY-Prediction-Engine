@@ -67,68 +67,80 @@ fun DataConnectionsTable(
             .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
             .testTag("data_connectivity_table_card")
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
             // Table Header Bar
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
                     Icon(
                         imageVector = Icons.Default.Cable,
                         contentDescription = "Connectivity",
                         tint = Color(0xFF00E5FF),
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(15.dp)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = "CONNECTED SPOT EXCHANGE APIS",
+                        text = "SPOT APIS",
                         color = Color(0xFF00E5FF),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace,
-                        letterSpacing = 0.8.sp
+                        letterSpacing = 0.5.sp,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End
+                ) {
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
                             .background(Color(0xFF00E676).copy(alpha = 0.15f))
                             .border(1.dp, Color(0xFF00E676).copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 5.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = "$activeCount / 3 LIVE APIS",
+                            text = "$activeCount/3 LIVE",
                             color = Color(0xFF00E676),
-                            fontSize = 10.sp,
+                            fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                     if (totalTicks > 0) {
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
                                 .background(Color(0xFF1E293B))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
                         ) {
                             Text(
                                 text = "${String.format(Locale.US, "%,d", totalTicks)} TICKS",
                                 color = Color(0xFF38BDF8),
-                                fontSize = 10.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Table Column Headers
             Row(
@@ -136,17 +148,17 @@ fun DataConnectionsTable(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(4.dp))
                     .background(Color(0xFF070B13))
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 6.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("EXCHANGE", color = Color(0xFF64748B), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.3f))
-                Text("STATE", color = Color(0xFF64748B), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.1f))
-                Text("TRANSPORT", color = Color(0xFF64748B), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.0f))
-                Text("TICKS", color = Color(0xFF64748B), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.9f))
-                Text("SPOT PRICE", color = Color(0xFF64748B), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.3f))
+                Text("EXCHANGE", color = Color(0xFF64748B), fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, modifier = Modifier.weight(1.3f))
+                Text("STATE", color = Color(0xFF64748B), fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, modifier = Modifier.weight(1.1f))
+                Text("TRANSPORT", color = Color(0xFF64748B), fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, modifier = Modifier.weight(1.0f))
+                Text("TICKS", color = Color(0xFF64748B), fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, modifier = Modifier.weight(0.9f))
+                Text("SPOT PRICE", color = Color(0xFF64748B), fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, modifier = Modifier.weight(1.3f))
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(3.dp))
 
             // Exchange Rows
             orderedKeys.forEachIndexed { index, key ->
@@ -194,7 +206,7 @@ private fun DataSourceRow(status: DataSourceStatus) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 5.dp),
+            .padding(horizontal = 6.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Exchange Column
@@ -204,17 +216,19 @@ private fun DataSourceRow(status: DataSourceStatus) {
         ) {
             Box(
                 modifier = Modifier
-                    .size(7.dp)
+                    .size(6.dp)
                     .clip(CircleShape)
                     .background(stateColor)
             )
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(4.dp))
             Text(
                 text = status.displayName.replace(" Spot", ""),
                 color = Color.White,
-                fontSize = 11.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                softWrap = false
             )
         }
 
@@ -228,7 +242,9 @@ private fun DataSourceRow(status: DataSourceStatus) {
                 color = stateColor,
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                softWrap = false
             )
         }
 
@@ -240,9 +256,11 @@ private fun DataSourceRow(status: DataSourceStatus) {
                 ConnectionType.NONE -> "NONE"
             },
             color = if (status.connectionType == ConnectionType.WEBSOCKET) Color(0xFF00E5FF) else Color(0xFF94A3B8),
-            fontSize = 10.sp,
+            fontSize = 9.sp,
             fontWeight = FontWeight.SemiBold,
             fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.weight(1.0f)
         )
 
@@ -250,9 +268,11 @@ private fun DataSourceRow(status: DataSourceStatus) {
         Text(
             text = if (status.messageCount > 0) String.format(Locale.US, "%,d", status.messageCount) else "-",
             color = Color(0xFF38BDF8),
-            fontSize = 10.sp,
+            fontSize = 9.sp,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.weight(0.9f)
         )
 
@@ -260,9 +280,11 @@ private fun DataSourceRow(status: DataSourceStatus) {
         Text(
             text = if (status.latestPrice != null && status.latestPrice > 0.0) "$${String.format(Locale.US, "%,.1f", status.latestPrice)}" else "-",
             color = Color.White,
-            fontSize = 11.sp,
+            fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.weight(1.3f)
         )
     }

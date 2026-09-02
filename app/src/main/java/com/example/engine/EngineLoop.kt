@@ -78,6 +78,23 @@ class EngineLoop(
         // Start background multi-exchange WebSockets
         dataFeed.startStreaming()
 
+        // Fetch authentic 15-minute real market candles on launch if priceHistory is empty
+        scope.launch {
+            if (priceHistory.isEmpty()) {
+                val historicalCandles = dataFeed.fetchRecent15mCandles()
+                if (historicalCandles.isNotEmpty()) {
+                    priceHistory.addAll(historicalCandles)
+                    if (referencePrice == null && historicalCandles.isNotEmpty()) {
+                        referencePrice = historicalCandles.first().price
+                    }
+                    _state.value = _state.value.copy(
+                        recentPrices = priceHistory.getPrices(),
+                        latestPrice = historicalCandles.last().price
+                    )
+                }
+            }
+        }
+
         // Core 2.0-second Engine Heartbeat Loop
         job = scope.launch {
             _state.value = _state.value.copy(isRunning = true, errorLog = null)

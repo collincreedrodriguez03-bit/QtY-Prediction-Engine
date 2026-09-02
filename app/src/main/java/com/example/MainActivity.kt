@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import com.example.engine.EngineState
 import com.example.engine.LivePerformanceStats
 import com.example.engine.PredictionRecord
+import com.example.ui.Btc15MinMarketChart
 import com.example.ui.BtcLivePredictionChart
 import com.example.ui.DataConnectionsTable
 import com.example.ui.EngineRoomTab
@@ -283,38 +284,31 @@ fun HeaderBar(
 /**
  * Tab 0: MAIN / PREDICTION
  * Centered around:
- * 1. 30s Scalp Prediction Banner & Target (Displayed prominently at the top)
- * 2. Focused Live Dynamic BTC Graph (Actual solid line & +30s predicted dotted trajectory)
- * 3. Connected Spot APIs Table (Real validated multi-exchange feeds)
- * 4. Real Measured Live Scalp Accuracy Card
+ * 1. 30s Scalp Prediction Banner & Target
+ * 2. 15-Minute Real BTC Market-Price Graph (Historical/Live Spot only - NO predictions)
+ * 3. 30-Second Dynamic BTC Prediction Graph (Live Spot Price, Exact Time, 30s Target & Timer)
+ * 4. Connected Spot APIs Table (Real validated multi-exchange feeds)
+ * 5. Real Measured Live Scalp Accuracy Card
  */
 @Composable
 fun MainPredictionTab(engineState: EngineState) {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // 1. 30s Prediction Card (Prominently placed at the TOP above graph)
+        // 1. Clean 15-Minute Real BTC Market-Price Graph (Historical & Live Real Data Only)
         item {
-            PredictionCard(engineState = engineState)
+            Btc15MinMarketChart(engineState = engineState)
         }
 
-        // 2. Focused Centerpiece Live Graph
+        // 2. Focused Live 30-Second BTC Prediction Graph (Current Spot & Time on Left, Projected Price & Timer on Right)
         item {
             BtcLivePredictionChart(engineState = engineState)
         }
 
-        // 3. Connected Spot APIs Table
-        item {
-            DataConnectionsTable(
-                sourceStatuses = engineState.sourceStatuses,
-                totalTicks = engineState.totalTicks
-            )
-        }
-
-        // 4. Measured Live Scalp Performance & Learning Card
+        // 3. Measured Live Scalp Performance & Statistical Evaluation Card
         item {
             LivePerformanceCard(stats = engineState.performanceStats)
         }
@@ -454,7 +448,7 @@ fun LivePerformanceCard(stats: LivePerformanceStats) {
             .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
             .testTag("live_performance_card")
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             // Header with Market Regime
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -466,11 +460,11 @@ fun LivePerformanceCard(stats: LivePerformanceStats) {
                         imageVector = Icons.Default.AutoGraph,
                         contentDescription = "Performance",
                         tint = Color(0xFF00E5FF),
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(17.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "MEASURED LIVE SCALP ACCURACY",
+                        text = "LIVE EVALUATION METRICS",
                         color = Color(0xFF00E5FF),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Black,
@@ -502,65 +496,118 @@ fun LivePerformanceCard(stats: LivePerformanceStats) {
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // Primary Win Rate & Stat Matrix
+            // Dual Stream Win Rate & Stat Matrix
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Operational Stream (Continuous 2s Stream)
                 Column {
                     Text(
-                        text = "MEASURED WIN RATE",
+                        text = "OPERATIONAL (2s STREAM)",
                         color = Color(0xFF64748B),
-                        fontSize = 10.sp,
+                        fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.5.sp
                     )
-                    if (stats.totalResolved > 0) {
-                        val wrColor = if (stats.winRatePercent >= 75.0) Color(0xFF00E676) else if (stats.winRatePercent >= 50.0) Color(0xFF38BDF8) else Color(0xFFFFD600)
+                    if (stats.operationalResolvedCount > 0) {
+                        val wrColor = if (stats.operationalWinRatePercent >= 75.0) Color(0xFF00E676) else if (stats.operationalWinRatePercent >= 50.0) Color(0xFF38BDF8) else Color(0xFFFFD600)
                         Text(
-                            text = "${stats.winRatePercent}%",
+                            text = "${stats.operationalWinRatePercent}%",
                             color = wrColor,
-                            fontSize = 32.sp,
+                            fontSize = 26.sp,
                             fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     } else {
                         Text(
-                            text = "RESOLVING...",
+                            text = "AWAITING...",
                             color = Color(0xFF94A3B8),
-                            fontSize = 18.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )
+                    }
+                    Text(
+                        text = "Resolved: ${stats.operationalResolvedCount} / ${stats.operationalPredictionCount}",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                // Statistical Non-Overlapping Stream (T, T+30s, ...)
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "STATISTICAL (30s STREAM)",
+                        color = Color(0xFF64748B),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                    if (stats.statisticalEvaluationCount > 0) {
+                        val statColor = if (stats.statisticalWinRatePercent >= 75.0) Color(0xFF00E676) else if (stats.statisticalWinRatePercent >= 50.0) Color(0xFF38BDF8) else Color(0xFFFFD600)
                         Text(
-                            text = "Awaiting maturity (${stats.pendingCount} pending)",
-                            color = Color(0xFF64748B),
-                            fontSize = 10.sp,
+                            text = "${stats.statisticalWinRatePercent}%",
+                            color = statColor,
+                            fontSize = 26.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    } else {
+                        Text(
+                            text = "AWAITING...",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )
                     }
-                }
-
-                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = "Resolved: ${stats.totalResolved} / ${stats.totalPredictions}",
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
+                        text = "Samples: ${stats.statisticalEvaluationCount} (Non-Overlap)",
+                        color = Color(0xFF38BDF8),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
                     )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Baselines Benchmarking Bar (Using identical non-overlapping samples)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF090E17))
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "BASELINES (SAME SAMPLES):",
+                    color = Color(0xFF64748B),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Correct: ${stats.correctCount}  •  Incorrect: ${stats.incorrectCount}",
+                        text = "Always-UP: ${stats.baselineAlwaysUpWinRate}%",
                         color = Color(0xFF94A3B8),
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace
                     )
                     Text(
-                        text = "UP: ${stats.upWinRatePercent}% (${stats.totalUpTrades}) | DN: ${stats.downWinRatePercent}% (${stats.totalDownTrades})",
-                        color = Color(0xFF38BDF8),
+                        text = "Always-DOWN: ${stats.baselineAlwaysDownWinRate}%",
+                        color = Color(0xFF94A3B8),
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace
                     )

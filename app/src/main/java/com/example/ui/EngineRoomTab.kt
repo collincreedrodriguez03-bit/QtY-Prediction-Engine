@@ -57,25 +57,33 @@ fun EngineRoomTab(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // 1. Quantitative Scalping Formulation Blackboard
+        // 1. Multi-Exchange Connectivity & Live Tick Counters
         item {
-            EngineRoomMathCard(engineState = engineState)
+            DataConnectionsTable(
+                sourceStatuses = engineState.sourceStatuses,
+                totalTicks = engineState.totalTicks
+            )
         }
 
-        // 2. Real-Time Indicator Metrics Matrix
-        item {
-            EngineIndicatorsGridCard(snapshot = engineState.latestSnapshot)
-        }
-
-        // 3. Multi-Exchange Spot Consolidation & Divergence Inspector
+        // 2. Multi-Exchange Spot Consolidation & Divergence Inspector
         item {
             SpotConsolidationInspectorCard(engineState = engineState)
         }
 
-        // 4. Closed-Loop Empirical Learning Calibration
+        // 3. Quantitative Scalping Formulation Blackboard
+        item {
+            EngineRoomMathCard(engineState = engineState)
+        }
+
+        // 4. Real-Time Indicator Metrics Matrix
+        item {
+            EngineIndicatorsGridCard(snapshot = engineState.latestSnapshot)
+        }
+
+        // 5. Closed-Loop Empirical Learning Calibration (v1 Frozen vs v2 Calibrated)
         item {
             AdaptiveCalibrationCard(engineState = engineState)
         }
@@ -480,6 +488,7 @@ fun SpotConsolidationInspectorCard(engineState: EngineState) {
 @Composable
 fun AdaptiveCalibrationCard(engineState: EngineState) {
     val stats = engineState.performanceStats
+    val latestPred = engineState.latestPrediction
 
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
@@ -489,7 +498,7 @@ fun AdaptiveCalibrationCard(engineState: EngineState) {
             .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
             .testTag("adaptive_calibration_card")
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -504,7 +513,7 @@ fun AdaptiveCalibrationCard(engineState: EngineState) {
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "EMPIRICAL ADAPTIVE CALIBRATION",
+                        text = "ADAPTIVE CALIBRATION (v1 FROZEN vs v2)",
                         color = Color(0xFF00E5FF),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Black,
@@ -513,21 +522,56 @@ fun AdaptiveCalibrationCard(engineState: EngineState) {
                     )
                 }
 
-                val biasStr = String.format(Locale.US, "%+.3f", stats.learningBiasAdjustment)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFF00E676).copy(alpha = 0.15f))
+                        .border(1.dp, Color(0xFF00E676).copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "v1 BASELINE FROZEN",
+                        color = Color(0xFF00E676),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Score Comparison: v1 Frozen Score vs v2 Advisory Score
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF090E17))
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    text = "Bias Δw = $biasStr",
-                    color = if (stats.learningBiasAdjustment != 0.0) Color(0xFF00E676) else Color(0xFF94A3B8),
-                    fontSize = 10.sp,
+                    text = "v1 Live Score: ${latestPred?.score ?: 0.50}",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "v2 Calibrated Score: ${latestPred?.calibratedScore ?: 0.50}",
+                    color = Color(0xFF38BDF8),
+                    fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             if (stats.factorAttributions.isEmpty()) {
                 Text(
-                    text = "Calibrating adaptive factor offsets with live feed...",
+                    text = "Calibrating empirical factor offsets with live feed...",
                     color = Color(0xFF64748B),
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace
@@ -556,7 +600,7 @@ fun AdaptiveCalibrationCard(engineState: EngineState) {
                         )
                         val offsetStr = String.format(Locale.US, "%+.2f", factor.suggestedWeightOffset)
                         Text(
-                            text = "Offset: $offsetStr",
+                            text = "v2 Δw: $offsetStr",
                             color = Color(0xFF38BDF8),
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace,

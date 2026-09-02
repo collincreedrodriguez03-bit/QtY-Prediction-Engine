@@ -486,6 +486,84 @@ class BtcDataFeed(
     }
 
     /**
+     * Fetches recent 15-minute 1m kline candles from Binance (with Coinbase fallback)
+     * for authentic historical market charting on startup.
+     */
+    suspend fun fetchRecent15mCandles(): List<PricePoint> = withContext(Dispatchers.IO) {
+        val points = mutableListOf<PricePoint>()
+        // 1. Try Binance 1m klines (15 minutes)
+        try {
+            val url = "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=15"
+            val req = Request.Builder().url(url).build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string()
+                    if (!body.isNullOrBlank()) {
+                        val array = org.json.JSONArray(body)
+                        for (i in 0 until array.length()) {
+                            val candle = array.getJSONArray(i)
+                            val openTime = candle.getLong(0)
+                            val closePrice = candle.getString(4).toDoubleOrNull() ?: 0.0
+                            val volume = candle.getString(5).toDoubleOrNull() ?: 1.0
+                            if (closePrice > 0.0) {
+                                points.add(
+                                    PricePoint(
+                                        price = closePrice,
+                                        timestamp = openTime,
+                                        exchange = "BINANCE",
+                                        volume = volume
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            SafeLog.w(TAG, "Binance 15m candle fetch error: ${e.message}")
+        }
+
+        if (points.isNotEmpty()) {
+            return@withContext points
+        }
+
+        // 2. Coinbase fallback for 1m candles
+        try {
+            val url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
+            val req = Request.Builder().url(url).header("User-Agent", "QtY-Quant").build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string()
+                    if (!body.isNullOrBlank()) {
+                        val array = org.json.JSONArray(body)
+                        val count = minOf(array.length(), 15)
+                        for (i in (count - 1) downTo 0) {
+                            val candle = array.getJSONArray(i)
+                            val epochSec = candle.getLong(0)
+                            val closePrice = candle.getDouble(4)
+                            val volume = candle.getDouble(5)
+                            if (closePrice > 0.0) {
+                                points.add(
+                                    PricePoint(
+                                        price = closePrice,
+                                        timestamp = epochSec * 1000L,
+                                        exchange = "COINBASE",
+                                        volume = volume
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            SafeLog.w(TAG, "Coinbase 15m candle fallback error: ${e.message}")
+        }
+
+        points
+    }
+
+    /**
      * Retrieves all recently cached spot PricePoints for consolidation.
      */
     fun getLatestSpotPoints(): List<PricePoint> {

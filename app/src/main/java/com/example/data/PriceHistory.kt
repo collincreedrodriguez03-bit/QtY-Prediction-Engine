@@ -4,11 +4,11 @@ import java.util.Collections
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * Thread-safe rolling price history window (5–10 minutes).
- * At 2-second cycle intervals, 300 points = 10 minutes.
+ * Thread-safe rolling price history window (15+ minutes).
+ * At 2-second cycle intervals, 450-500 points = 15-17 minutes.
  */
 class PriceHistory(
-    private val maxCapacity: Int = 300
+    private val maxCapacity: Int = 500
 ) {
     private val history = CopyOnWriteArrayList<PricePoint>()
 
