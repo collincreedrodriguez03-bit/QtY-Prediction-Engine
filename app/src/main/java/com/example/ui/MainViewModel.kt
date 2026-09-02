@@ -135,11 +135,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun runBacktestReplay(sampleCount: Int = 150) {
         viewModelScope.launch(Dispatchers.Default) {
             _uiState.value = _uiState.value.copy(isBacktesting = true)
-            val syntheticData = backtester.generateSyntheticHistoricalData(
-                startPrice = if (_uiState.value.engineState.latestPrice > 0) _uiState.value.engineState.latestPrice else 90000.0,
-                count = sampleCount
-            )
-            val result = backtester.runBacktest(syntheticData)
+            val realHistory = priceHistory.getAll()
+            val replayData = if (realHistory.size >= 40) {
+                realHistory
+            } else {
+                val candles = dataFeed.fetchRecent15mCandles()
+                if (candles.size >= 40) {
+                    candles
+                } else {
+                    backtester.generateSyntheticHistoricalData(
+                        startPrice = if (_uiState.value.engineState.latestPrice > 0) _uiState.value.engineState.latestPrice else 90000.0,
+                        count = sampleCount
+                    )
+                }
+            }
+            val result = backtester.runBacktest(replayData)
 
             // Save backtest permanently to Room database
             repository.recordBacktestResult(result, 30)

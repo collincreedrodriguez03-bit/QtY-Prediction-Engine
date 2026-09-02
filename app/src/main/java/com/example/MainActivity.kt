@@ -582,35 +582,67 @@ fun LivePerformanceCard(stats: LivePerformanceStats) {
             Spacer(modifier = Modifier.height(8.dp))
 
             // Baselines Benchmarking Bar (Using identical non-overlapping samples)
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(6.dp))
                     .background(Color(0xFF090E17))
-                    .padding(horizontal = 8.dp, vertical = 5.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(
-                    text = "BASELINES (SAME SAMPLES):",
-                    color = Color(0xFF64748B),
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "Always-UP: ${stats.baselineAlwaysUpWinRate}%",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 10.sp,
+                        text = "ACTIVE TRADE BASELINE:",
+                        color = Color(0xFF64748B),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace
                     )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "UP: ${stats.baselineAlwaysUpWinRate}%",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "DOWN: ${stats.baselineAlwaysDownWinRate}%",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "Always-DOWN: ${stats.baselineAlwaysDownWinRate}%",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 10.sp,
+                        text = "GLOBAL INTERVAL BASELINE:",
+                        color = Color(0xFF64748B),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace
                     )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "UP: ${stats.globalBaselineAlwaysUpWinRate}%",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "DOWN: ${stats.globalBaselineAlwaysDownWinRate}%",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
                 }
             }
         }

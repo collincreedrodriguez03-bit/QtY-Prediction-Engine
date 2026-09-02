@@ -55,20 +55,26 @@ class DataValidator(
     fun validateCrossExchange(
         binance: PricePoint?,
         kraken: PricePoint?,
+        coinbase: PricePoint? = null,
         bitstamp: PricePoint? = null
     ): ExchangeComparison {
         val bPrice = binance?.price?.takeIf { it > 0.0 }
         val kPrice = kraken?.price?.takeIf { it > 0.0 }
+        val cPrice = coinbase?.price?.takeIf { it > 0.0 }
         val sPrice = bitstamp?.price?.takeIf { it > 0.0 }
 
-        if (bPrice != null && kPrice != null) {
-            val diff = kotlin.math.abs(bPrice - kPrice)
-            val divergencePct = (diff / bPrice) * 100.0
+        val activePrices = listOfNotNull(bPrice, kPrice, cPrice, sPrice)
+
+        if (activePrices.size >= 2) {
+            val minP = activePrices.minOrNull() ?: 0.0
+            val maxP = activePrices.maxOrNull() ?: 0.0
+            val meanP = activePrices.average()
+            val divergencePct = if (meanP > 0.0) ((maxP - minP) / meanP) * 100.0 else 0.0
 
             val (status, adj) = when {
                 divergencePct <= 0.10 -> Pair(ExchangeAgreementStatus.STRONG_AGREEMENT, 0.05)
                 divergencePct > 0.50 -> {
-                    SafeLog.w(TAG, "Exchange price divergence detected: Binance=$bPrice, Kraken=$kPrice (${String.format("%.3f", divergencePct)}%)")
+                    SafeLog.w(TAG, "Exchange price divergence detected across ${activePrices.size} feeds (${String.format("%.3f", divergencePct)}%)")
                     Pair(ExchangeAgreementStatus.DISAGREEMENT, -0.10)
                 }
                 else -> Pair(ExchangeAgreementStatus.MODERATE_AGREEMENT, 0.0)
@@ -77,6 +83,7 @@ class DataValidator(
             return ExchangeComparison(
                 binancePrice = bPrice,
                 krakenPrice = kPrice,
+                coinbasePrice = cPrice,
                 bitstampPrice = sPrice,
                 divergencePercent = divergencePct,
                 agreementStatus = status,
@@ -88,6 +95,7 @@ class DataValidator(
         return ExchangeComparison(
             binancePrice = bPrice,
             krakenPrice = kPrice,
+            coinbasePrice = cPrice,
             bitstampPrice = sPrice,
             divergencePercent = 0.0,
             agreementStatus = ExchangeAgreementStatus.SINGLE_EXCHANGE,

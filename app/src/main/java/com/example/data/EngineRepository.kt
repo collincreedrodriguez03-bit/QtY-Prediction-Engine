@@ -58,6 +58,7 @@ class EngineRepository(
             maturityTimestamp = record.maturityTimestamp,
             actualPrice = record.actualPrice,
             result = record.result ?: "PENDING",
+            calibratedScore = record.calibratedScore,
             ema9 = record.inputs.ema9,
             ema21 = record.inputs.ema21,
             rsi = record.inputs.rsi,
@@ -143,6 +144,7 @@ class EngineRepository(
                 currentPrice = entity.currentPrice,
                 predictionHorizon = entity.predictionHorizon,
                 maturityTimestamp = entity.maturityTimestamp,
+                calibratedScore = entity.calibratedScore,
                 actualPrice = entity.actualPrice,
                 result = entity.result
             )

@@ -5,7 +5,8 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * Performance metrics and factor attribution analysis for QtY Scalping Engine.
+ * Performance metrics and empirical factor association analysis for QtY Scalping Engine.
+ * Note: Factor attribution represents empirical association/correlation under activation, not causal contribution.
  */
 data class FactorAttribution(
     val factorName: String,
@@ -24,12 +25,19 @@ data class LivePerformanceStats(
     val operationalWinRatePercent: Double = 0.0,
 
     // 2. Statistical Non-Overlapping 30s Evaluation Stream (T, T+30s, T+60s, ...)
+    // Explicitly non-overlapping time windows; does NOT assume i.i.d. statistical independence
     val statisticalEvaluationCount: Int = 0,
     val statisticalCorrectCount: Int = 0,
     val statisticalIncorrectCount: Int = 0,
     val statisticalWinRatePercent: Double = 0.0,
+
+    // Baselines on Active Trade Opportunities (Model-eligible samples)
     val baselineAlwaysUpWinRate: Double = 0.0,
     val baselineAlwaysDownWinRate: Double = 0.0,
+
+    // Baselines on Global Non-Overlapping Intervals (All intervals including NO-TRADE)
+    val globalBaselineAlwaysUpWinRate: Double = 0.0,
+    val globalBaselineAlwaysDownWinRate: Double = 0.0,
 
     // Backward-compatible accessors for existing UI bindings
     val totalPredictions: Int = operationalPredictionCount,
@@ -42,6 +50,7 @@ data class LivePerformanceStats(
     val downWinRatePercent: Double = 0.0,
     val totalUpTrades: Int = 0,
     val totalDownTrades: Int = 0,
+    val totalNoTrades: Int = 0,
     val averageDeltaDollars: Double = 0.0,
     val marketRegime: String = "RANGING",
     val factorAttributions: List<FactorAttribution> = emptyList(),
@@ -54,7 +63,7 @@ data class LivePerformanceStats(
  * Phase 4 & 5 Performance Tracking & Closed-Loop Learning Engine.
  *
  * Evaluates point-in-time predictions against actual market prices when maturity (30s) is reached.
- * Analyzes factor attribution and provides empirical, zero-lookahead calibration adjustments.
+ * Analyzes empirical factor association and provides zero-lookahead calibration adjustments.
  */
 class PerformanceTracker {
     private val pendingPredictions = mutableListOf<PredictionRecord>()
@@ -83,7 +92,10 @@ class PerformanceTracker {
 
     /**
      * Resolves all pending predictions that have reached or passed their maturity timestamp.
-     * Returns the list of newly resolved predictions in this cycle.
+     * Evaluates directional outcome strictly at t + 30s:
+     * - UP: winning if actualPrice > currentPrice; zero change or drop = INCORRECT
+     * - DOWN: winning if actualPrice < currentPrice; zero change or rise = INCORRECT
+     * - NO-TRADE: marked NEUTRAL / NO_ACTION
      */
     @Synchronized
     fun resolveMatured(currentPrice: Double, currentTimestamp: Long): List<PredictionRecord> {
@@ -99,7 +111,7 @@ class PerformanceTracker {
                 record.result = when (record.decision) {
                     "UP" -> if (priceDiff > 0.0) "CORRECT" else "INCORRECT"
                     "DOWN" -> if (priceDiff < 0.0) "CORRECT" else "INCORRECT"
-                    else -> "NEUTRAL"
+                    else -> "NO-TRADE"
                 }
 
                 resolvedPredictions.add(record)
@@ -127,7 +139,10 @@ class PerformanceTracker {
      */
     @Synchronized
     fun computeStats(currentSnapshot: IndicatorSnapshot?): LivePerformanceStats {
-        val validTrades = resolvedPredictions.filter { it.decision == "UP" || it.decision == "DOWN" }
+        val allResolved = resolvedPredictions.toList()
+        val validTrades = allResolved.filter { it.decision == "UP" || it.decision == "DOWN" }
+        val noTrades = allResolved.filter { it.decision != "UP" && it.decision != "DOWN" }
+
         val opCorrect = validTrades.count { it.result == "CORRECT" }
         val opIncorrect = validTrades.count { it.result == "INCORRECT" }
 
@@ -137,8 +152,8 @@ class PerformanceTracker {
             0.0
         }
 
-        // Dedicated Non-Overlapping 30s Evaluation Stream (T, T+30s, T+60s, ...)
-        // Filters trades that are spaced by at least 30 seconds (30,000ms) from the prior evaluation sample
+        // Dedicated Non-Overlapping 30s Statistical Evaluation Stream (T, T+30s, T+60s, ...)
+        // Filters distinct predictions spaced by >= 30,000ms to eliminate overlapping evaluation horizons
         val nonOverlappingTrades = mutableListOf<PredictionRecord>()
         var lastEvaluatedTimestamp = 0L
         val sortedTrades = validTrades.sortedBy { it.timestamp }
@@ -155,7 +170,7 @@ class PerformanceTracker {
             ((statCorrect.toDouble() / nonOverlappingTrades.size) * 1000.0).roundToInt() / 10.0
         } else 0.0
 
-        // Benchmark Baselines using the exact same eligible non-overlapping evaluation samples
+        // Benchmark Baselines evaluated on active model trade opportunities (same non-overlapping subset)
         var baseUpWins = 0
         var baseDownWins = 0
         for (trade in nonOverlappingTrades) {
@@ -168,6 +183,30 @@ class PerformanceTracker {
         } else 0.0
         val baseDownRate = if (nonOverlappingTrades.isNotEmpty()) {
             ((baseDownWins.toDouble() / nonOverlappingTrades.size) * 1000.0).roundToInt() / 10.0
+        } else 0.0
+
+        // Global Non-Overlapping Baseline across ALL intervals (including NO-TRADE intervals)
+        val globalNonOverlapping = mutableListOf<PredictionRecord>()
+        var lastGlobalTimestamp = 0L
+        val sortedAll = allResolved.sortedBy { it.timestamp }
+        for (rec in sortedAll) {
+            if (rec.timestamp - lastGlobalTimestamp >= 30_000L) {
+                globalNonOverlapping.add(rec)
+                lastGlobalTimestamp = rec.timestamp
+            }
+        }
+        var globalUpWins = 0
+        var globalDownWins = 0
+        for (rec in globalNonOverlapping) {
+            val delta = (rec.actualPrice ?: rec.currentPrice) - rec.currentPrice
+            if (delta > 0.0) globalUpWins++
+            if (delta < 0.0) globalDownWins++
+        }
+        val globalUpRate = if (globalNonOverlapping.isNotEmpty()) {
+            ((globalUpWins.toDouble() / globalNonOverlapping.size) * 1000.0).roundToInt() / 10.0
+        } else 0.0
+        val globalDownRate = if (globalNonOverlapping.isNotEmpty()) {
+            ((globalDownWins.toDouble() / globalNonOverlapping.size) * 1000.0).roundToInt() / 10.0
         } else 0.0
 
         val upTrades = validTrades.filter { it.decision == "UP" }
@@ -185,14 +224,13 @@ class PerformanceTracker {
         val totalDelta = validTrades.sumOf { (it.actualPrice ?: it.currentPrice) - it.currentPrice }
         val avgDelta = if (validTrades.isNotEmpty()) totalDelta / validTrades.size else 0.0
 
-        // Market Regime Detection (Phase 5 Feature)
+        // Market Regime Detection
         val regime = determineMarketRegime(currentSnapshot)
 
-        // Factor Attribution Analysis (Phase 4 Feature)
+        // Empirical Factor Association Analysis (Labeled Non-Causal)
         val factors = computeFactorAttributions(validTrades)
 
         // Closed-Loop Learning Bias Adjustment:
-        // If recent resolved predictions show a systematic directional bias, calculate empirical delta
         val recentWindow = validTrades.takeLast(20)
         val recentUpWins = recentWindow.filter { it.decision == "UP" && it.result == "CORRECT" }.size
         val recentDownWins = recentWindow.filter { it.decision == "DOWN" && it.result == "CORRECT" }.size
@@ -212,10 +250,13 @@ class PerformanceTracker {
             statisticalWinRatePercent = statWinRate,
             baselineAlwaysUpWinRate = baseUpRate,
             baselineAlwaysDownWinRate = baseDownRate,
+            globalBaselineAlwaysUpWinRate = globalUpRate,
+            globalBaselineAlwaysDownWinRate = globalDownRate,
             upWinRatePercent = upWinRate,
             downWinRatePercent = downWinRate,
             totalUpTrades = upTrades.size,
             totalDownTrades = downTrades.size,
+            totalNoTrades = noTrades.size,
             averageDeltaDollars = avgDelta,
             marketRegime = regime,
             factorAttributions = factors,

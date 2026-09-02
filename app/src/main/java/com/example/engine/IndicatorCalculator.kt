@@ -6,21 +6,30 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
- * Validated Mathematical Indicator Calculator for Real-Time BTC Scalping.
- * Implements exact formulas for EMA, RSI, Momentum, Velocity, Acceleration,
- * Volatility, Volume surge, Buffer, and Bid-Ask Spread.
+ * Validated Mathematical Indicator Calculator for Real-Time BTC Micro-Scalping.
+ *
+ * Micro-Scalping Timeframe Mappings under 2-Second Heartbeat:
+ * - EMA 9: 18-second exponential moving average (9 cycles @ 2s)
+ * - EMA 21: 42-second exponential moving average (21 cycles @ 2s)
+ * - RSI 14: 28-second Wilder's Smoothed Relative Strength Index (14 cycles @ 2s)
+ * - Momentum 5: 10-second rate-of-change (5 cycles @ 2s)
+ * - Volatility 10: 20-second rolling standard deviation (10 cycles @ 2s)
+ * - Volume Surge 5: 10-second volume ratio vs 5-cycle moving average
+ * - Velocity: Instantaneous 1-cycle ($/sec) price velocity
+ * - Acceleration: 1-cycle velocity rate of change ($/sec²)
+ * - Strike / Buffer: Rolling reference delta (Current Price - Rolling Anchor Price)
+ * - Bid-Ask Spread: Micro-liquidity cost metric
  */
 class IndicatorCalculator {
 
     /**
      * Exponential Moving Average (EMA).
-     * Formula: EMA = (Price * alpha) + (Previous_EMA * (1 - alpha))
+     * Formula: EMA_t = (Price_t * alpha) + (EMA_{t-1} * (1 - alpha))
      * alpha = 2 / (N + 1)
      */
     fun calculateEMA(prices: List<Double>, period: Int, previousEMA: Double? = null): Double {
         if (prices.isEmpty()) return 0.0
         if (prices.size < period && previousEMA == null) {
-            // Graceful fallback to Simple Moving Average if insufficient periods
             return prices.average()
         }
 
@@ -40,7 +49,7 @@ class IndicatorCalculator {
     }
 
     /**
-     * Relative Strength Index (RSI) over 14 periods.
+     * Relative Strength Index (RSI) over 14 cycles (28 seconds @ 2s cadence).
      * Wilder's Smoothing method.
      * Range: 0.0 to 100.0
      */
@@ -53,7 +62,6 @@ class IndicatorCalculator {
         }
 
         if (changes.size < period) {
-            // Simple RSI for early data
             var gainSum = 0.0
             var lossSum = 0.0
             for (change in changes) {
@@ -66,7 +74,6 @@ class IndicatorCalculator {
             return 100.0 - (100.0 / (1.0 + rs))
         }
 
-        // Wilder's RSI calculation
         var avgGain = 0.0
         var avgLoss = 0.0
 
@@ -97,8 +104,8 @@ class IndicatorCalculator {
     }
 
     /**
-     * Momentum = Current_Price - Price(lookback periods ago)
-     * Lookback: 5 periods
+     * Momentum = Current_Price - Price(lookback cycles ago)
+     * Lookback: 5 cycles (10 seconds)
      */
     fun calculateMomentum(prices: List<Double>, lookback: Int = 5): Double {
         if (prices.isEmpty()) return 0.0
@@ -129,7 +136,7 @@ class IndicatorCalculator {
     }
 
     /**
-     * Short-Term Volatility (10-period standard deviation of prices)
+     * Short-Term Micro-Volatility (10-cycle standard deviation = 20 seconds)
      */
     fun calculateVolatility(prices: List<Double>, period: Int = 10): Double {
         if (prices.size < 2) return 0.0
@@ -140,7 +147,7 @@ class IndicatorCalculator {
     }
 
     /**
-     * Volume surge = Current_Volume / Average_Volume(last 5 periods)
+     * Volume surge = Current_Volume / Average_Volume(last 5 cycles = 10s)
      */
     fun calculateVolumeSurge(volumes: List<Double>, lookback: Int = 5): Double {
         if (volumes.isEmpty()) return 1.0
@@ -152,7 +159,8 @@ class IndicatorCalculator {
     }
 
     /**
-     * Strike / Price Buffer = Current_Price - Reference_Price (e.g. Anchor / Session Open)
+     * Strike / Price Buffer = Current_Price - Rolling_Reference_Price
+     * Evaluates localized mean-reversion and micro-breakout potential.
      */
     fun calculateBuffer(currentPrice: Double, referencePrice: Double): Double {
         return currentPrice - referencePrice
@@ -210,7 +218,14 @@ class IndicatorCalculator {
         val volatility = calculateVolatility(prices, 10)
         val volume = currentPoint.volume
         val volumeChange = calculateVolumeSurge(volumes, 5)
-        val refPrice = referencePrice ?: points.first().price
+
+        // Rolling anchor prevents buffer saturation during prolonged multi-hour sessions
+        val refPrice = referencePrice ?: if (points.size >= 45) {
+            // Rolling 45-cycle (90s) median/mean anchor
+            points.takeLast(45).map { it.price }.average()
+        } else {
+            points.first().price
+        }
         val buffer = calculateBuffer(currentPoint.price, refPrice)
         val spread = calculateSpread(currentPoint.askPrice, currentPoint.bidPrice)
 

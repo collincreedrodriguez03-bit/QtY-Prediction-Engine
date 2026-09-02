@@ -18,6 +18,7 @@ data class PricePoint(
 data class ExchangeComparison(
     val binancePrice: Double?,
     val krakenPrice: Double?,
+    val coinbasePrice: Double? = null,
     val bitstampPrice: Double? = null,
     val timestamp: Long = System.currentTimeMillis(),
     val divergencePercent: Double = 0.0,

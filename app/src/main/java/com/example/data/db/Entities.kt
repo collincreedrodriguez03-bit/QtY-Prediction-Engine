@@ -31,6 +31,7 @@ data class PredictionEntity(
     val maturityTimestamp: Long,
     val actualPrice: Double?,
     val result: String?,
+    val calibratedScore: Double? = null,
     val ema9: Double,
     val ema21: Double,
     val rsi: Double,

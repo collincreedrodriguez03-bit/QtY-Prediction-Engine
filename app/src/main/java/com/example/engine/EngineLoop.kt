@@ -144,24 +144,26 @@ class EngineLoop(
         val binancePoint = cachedSpots.find { it.exchange == "BINANCE" }
         val krakenPoint = cachedSpots.find { it.exchange == "KRAKEN" }
         val coinbasePoint = cachedSpots.find { it.exchange == "COINBASE" }
+        val bitstampPoint = cachedSpots.find { it.exchange == "BITSTAMP" }
 
         // 2. [CONSOLIDATE & VERIFY] Multi-exchange Mathematical Consolidation
         val consolidatedState = consolidator.consolidate(cachedSpots, timestamp)
-        val comparison = validator.validateCrossExchange(binancePoint, krakenPoint, coinbasePoint)
+        val comparison = validator.validateCrossExchange(binancePoint, krakenPoint, coinbasePoint, bitstampPoint)
 
         val activePrice = if (consolidatedState.consolidatedPrice > 0.0) {
             consolidatedState.consolidatedPrice
         } else {
-            binancePoint?.price ?: coinbasePoint?.price ?: krakenPoint?.price ?: (if (priceHistory.size() > 0) priceHistory.getLatest()?.price ?: 0.0 else 0.0)
+            binancePoint?.price ?: coinbasePoint?.price ?: krakenPoint?.price ?: bitstampPoint?.price ?: 0.0
         }
 
+        // FAIL CLOSED: If valid real market data is unavailable, pause predictions
         if (activePrice <= 0.0) {
             _state.value = _state.value.copy(
                 cycleCount = cycleCounter,
                 sourceStatuses = dataFeed.sourceStatuses.value,
                 totalTicks = dataFeed.getTotalTicks(),
-                errorLog = "Connecting to spot exchanges...",
-                mathDisplay = "CONNECTING SPOT EXCHANGES..."
+                errorLog = "Awaiting valid market data (Predictions Paused)...",
+                mathDisplay = "AWAITING REAL-TIME MARKET FEEDS..."
             )
             return null
         }
@@ -174,10 +176,7 @@ class EngineLoop(
             volume = cachedSpots.sumOf { it.volume }.coerceAtLeast(1.0)
         )
 
-        // 3. [BUILD TIME SERIES] Add one clean point per 2s cycle to rolling price history
-        if (referencePrice == null) {
-            referencePrice = activePrice
-        }
+        // 3. [BUILD TIME SERIES] Add clean point per 2s cycle to rolling price history
         priceHistory.add(primaryPricePoint)
 
         // 4. [RESOLVE & LEARN] Resolve matured 30s predictions against actual market price
