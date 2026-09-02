@@ -8,6 +8,7 @@ import com.example.data.DataValidator
 import com.example.data.EngineRepository
 import com.example.data.JsonPredictionLogger
 import com.example.data.PriceHistory
+import com.example.data.SafeLog
 import com.example.data.db.AppDatabase
 import com.example.data.db.BacktestRecordEntity
 import com.example.engine.BacktestResult
@@ -20,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.roundToInt
@@ -75,42 +77,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // Hydrate PerformanceTracker from permanent Room database on startup
         viewModelScope.launch(Dispatchers.IO) {
-            val historical = repository.loadHistoricalPredictions()
-            if (historical.isNotEmpty()) {
-                engineLoop.performanceTracker.loadFromHistory(historical)
+            try {
+                val historical = repository.loadHistoricalPredictions()
+                if (historical.isNotEmpty()) {
+                    engineLoop.performanceTracker.loadFromHistory(historical)
+                }
+            } catch (e: Exception) {
+                SafeLog.e("MainViewModel", "Error hydrating history: ${e.message}")
             }
         }
 
         // Collect EngineLoop state
         viewModelScope.launch {
-            engineLoop.state.collect { loopState ->
-                _uiState.value = _uiState.value.copy(engineState = loopState)
+            try {
+                engineLoop.state.collect { loopState ->
+                    _uiState.value = _uiState.value.copy(engineState = loopState)
+                }
+            } catch (e: Exception) {
+                SafeLog.e("MainViewModel", "Error collecting engine state: ${e.message}")
             }
         }
 
         // Collect cumulative backtest history from Room database
         viewModelScope.launch {
-            repository.getBacktestHistory().collect { history ->
-                val totalRuns = history.size
-                val totalSamples = history.sumOf { it.totalSamples }
-                val totalTrades = history.sumOf { it.totalTrades }
-                val correct = history.sumOf { it.correctPredictions }
-                val incorrect = history.sumOf { it.incorrectPredictions }
-                val winRate = if (totalTrades > 0) {
-                    ((correct.toDouble() / totalTrades) * 1000.0).roundToInt() / 10.0
-                } else 0.0
+            try {
+                repository.getBacktestHistory()
+                    .catch { e ->
+                        SafeLog.e("MainViewModel", "Error in backtest history stream: ${e.message}")
+                    }
+                    .collect { history ->
+                        val totalRuns = history.size
+                        val totalSamples = history.sumOf { it.totalSamples }
+                        val totalTrades = history.sumOf { it.totalTrades }
+                        val correct = history.sumOf { it.correctPredictions }
+                        val incorrect = history.sumOf { it.incorrectPredictions }
+                        val winRate = if (totalTrades > 0) {
+                            ((correct.toDouble() / totalTrades) * 1000.0).roundToInt() / 10.0
+                        } else 0.0
 
-                _uiState.value = _uiState.value.copy(
-                    cumulativeBacktest = CumulativeBacktestMetrics(
-                        totalRuns = totalRuns,
-                        totalSamples = totalSamples,
-                        totalTrades = totalTrades,
-                        correctPredictions = correct,
-                        incorrectPredictions = incorrect,
-                        winRatePercent = winRate,
-                        historyList = history
-                    )
-                )
+                        _uiState.value = _uiState.value.copy(
+                            cumulativeBacktest = CumulativeBacktestMetrics(
+                                totalRuns = totalRuns,
+                                totalSamples = totalSamples,
+                                totalTrades = totalTrades,
+                                correctPredictions = correct,
+                                incorrectPredictions = incorrect,
+                                winRatePercent = winRate,
+                                historyList = history
+                            )
+                        )
+                    }
+            } catch (e: Exception) {
+                SafeLog.e("MainViewModel", "Error observing backtest history: ${e.message}")
             }
         }
 
@@ -135,31 +153,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun runBacktestReplay(sampleCount: Int = 150) {
         viewModelScope.launch(Dispatchers.Default) {
             _uiState.value = _uiState.value.copy(isBacktesting = true)
-            val realHistory = priceHistory.getAll()
-            val replayData = if (realHistory.size >= 40) {
-                realHistory
-            } else {
-                val candles = dataFeed.fetchRecent15mCandles()
-                if (candles.size >= 40) {
-                    candles
+            try {
+                val realHistory = priceHistory.getAll()
+                val replayData = if (realHistory.size >= 40) {
+                    realHistory
                 } else {
-                    backtester.generateSyntheticHistoricalData(
-                        startPrice = if (_uiState.value.engineState.latestPrice > 0) _uiState.value.engineState.latestPrice else 90000.0,
-                        count = sampleCount
-                    )
+                    val candles = dataFeed.fetchRecent15mCandles()
+                    if (candles.size >= 40) {
+                        candles
+                    } else {
+                        backtester.generateSyntheticHistoricalData(
+                            startPrice = if (_uiState.value.engineState.latestPrice > 0) _uiState.value.engineState.latestPrice else 90000.0,
+                            count = sampleCount
+                        )
+                    }
                 }
+                val result = backtester.runBacktest(replayData)
+
+                // Save backtest permanently to Room database
+                repository.recordBacktestResult(result, 30)
+
+                // Auto-navigate to BACKTEST tab (tab index 2)
+                _uiState.value = _uiState.value.copy(
+                    backtestResult = result,
+                    isBacktesting = false,
+                    activeTab = 2
+                )
+            } catch (e: Exception) {
+                SafeLog.e("MainViewModel", "Backtest execution failed: ${e.message}")
+                _uiState.value = _uiState.value.copy(isBacktesting = false)
             }
-            val result = backtester.runBacktest(replayData)
-
-            // Save backtest permanently to Room database
-            repository.recordBacktestResult(result, 30)
-
-            // Auto-navigate to BACKTEST tab (tab index 2)
-            _uiState.value = _uiState.value.copy(
-                backtestResult = result,
-                isBacktesting = false,
-                activeTab = 2
-            )
         }
     }
 

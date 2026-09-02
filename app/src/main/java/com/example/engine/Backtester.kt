@@ -181,6 +181,7 @@ class Backtester(
                                 statActiveBaseUpWins++
                             } else {
                                 statIncorrectCount++
+                                if (priceDelta < 0.0) statActiveBaseDownWins++
                             }
                         }
                         "DOWN" -> {

@@ -11,6 +11,7 @@ import com.example.engine.FactorAttribution
 import com.example.engine.IndicatorSnapshot
 import com.example.engine.PredictionRecord
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 
 class EngineRepository(
@@ -135,7 +136,10 @@ class EngineRepository(
     }
 
     fun getBacktestHistory(): Flow<List<BacktestRecordEntity>> {
-        return dao.getBacktestHistory()
+        return dao.getBacktestHistory().catch { e ->
+            SafeLog.e("EngineRepository", "Failed to stream backtest history: ${e.message}")
+            emit(emptyList())
+        }
     }
 
     suspend fun loadHistoricalPredictions(): List<PredictionRecord> {

@@ -109,7 +109,7 @@ fun DataConnectionsTable(
                             .padding(horizontal = 5.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = "$activeCount/3 LIVE",
+                            text = "$activeCount/${orderedKeys.size} LIVE",
                             color = Color(0xFF00E676),
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
