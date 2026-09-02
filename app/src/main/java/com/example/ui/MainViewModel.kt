@@ -5,8 +5,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.BtcDataFeed
 import com.example.data.DataValidator
+import com.example.data.EngineRepository
 import com.example.data.JsonPredictionLogger
 import com.example.data.PriceHistory
+import com.example.data.db.AppDatabase
+import com.example.data.db.BacktestRecordEntity
 import com.example.engine.BacktestResult
 import com.example.engine.Backtester
 import com.example.engine.EngineLoop
@@ -19,12 +22,24 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.roundToInt
+
+data class CumulativeBacktestMetrics(
+    val totalRuns: Int = 0,
+    val totalSamples: Int = 0,
+    val totalTrades: Int = 0,
+    val correctPredictions: Int = 0,
+    val incorrectPredictions: Int = 0,
+    val winRatePercent: Double = 0.0,
+    val historyList: List<BacktestRecordEntity> = emptyList()
+)
 
 data class MainUiState(
     val engineState: EngineState = EngineState(),
     val backtestResult: BacktestResult? = null,
+    val cumulativeBacktest: CumulativeBacktestMetrics = CumulativeBacktestMetrics(),
     val isBacktesting: Boolean = false,
-    val activeTab: Int = 0 // 0: Live Engine, 1: Backtest CCXT, 2: JSON Feed
+    val activeTab: Int = 0 // 0: LIVE ENGINE & GRAPHS, 1: ENGINE ROOM, 2: BACKTEST & LOGS
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -33,9 +48,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val logger = JsonPredictionLogger(logDir)
     val priceHistory = PriceHistory(300)
     val indicatorCalc = IndicatorCalculator()
-    val predictionEngine = PredictionEngine()
+    val predictionEngine = PredictionEngine(predictionHorizonSeconds = 30)
     val dataFeed = BtcDataFeed()
     val validator = DataValidator()
+    val database = AppDatabase.getDatabase(application)
+    val repository = EngineRepository(database)
 
     val engineLoop = EngineLoop(
         dataFeed = dataFeed,
@@ -43,7 +60,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         priceHistory = priceHistory,
         indicatorCalculator = indicatorCalc,
         predictionEngine = predictionEngine,
-        logger = logger
+        logger = logger,
+        repository = repository
     )
 
     val backtester = Backtester(
@@ -55,10 +73,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     init {
+        // Hydrate PerformanceTracker from permanent Room database on startup
+        viewModelScope.launch(Dispatchers.IO) {
+            val historical = repository.loadHistoricalPredictions()
+            if (historical.isNotEmpty()) {
+                engineLoop.performanceTracker.loadFromHistory(historical)
+            }
+        }
+
         // Collect EngineLoop state
         viewModelScope.launch {
             engineLoop.state.collect { loopState ->
                 _uiState.value = _uiState.value.copy(engineState = loopState)
+            }
+        }
+
+        // Collect cumulative backtest history from Room database
+        viewModelScope.launch {
+            repository.getBacktestHistory().collect { history ->
+                val totalRuns = history.size
+                val totalSamples = history.sumOf { it.totalSamples }
+                val totalTrades = history.sumOf { it.totalTrades }
+                val correct = history.sumOf { it.correctPredictions }
+                val incorrect = history.sumOf { it.incorrectPredictions }
+                val winRate = if (totalTrades > 0) {
+                    ((correct.toDouble() / totalTrades) * 1000.0).roundToInt() / 10.0
+                } else 0.0
+
+                _uiState.value = _uiState.value.copy(
+                    cumulativeBacktest = CumulativeBacktestMetrics(
+                        totalRuns = totalRuns,
+                        totalSamples = totalSamples,
+                        totalTrades = totalTrades,
+                        correctPredictions = correct,
+                        incorrectPredictions = incorrect,
+                        winRatePercent = winRate,
+                        historyList = history
+                    )
+                )
             }
         }
 
@@ -88,10 +140,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 count = sampleCount
             )
             val result = backtester.runBacktest(syntheticData)
+
+            // Save backtest permanently to Room database
+            repository.recordBacktestResult(result, 30)
+
+            // Auto-navigate to BACKTEST tab (tab index 2)
             _uiState.value = _uiState.value.copy(
                 backtestResult = result,
                 isBacktesting = false,
-                activeTab = 1
+                activeTab = 2
             )
         }
     }

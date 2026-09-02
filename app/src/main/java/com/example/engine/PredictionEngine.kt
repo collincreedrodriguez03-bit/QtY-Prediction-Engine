@@ -16,7 +16,7 @@ class PredictionEngine(
     val weightBuffer: Double = 0.05,
     val thresholdUp: Double = 0.65,
     val thresholdDown: Double = 0.35,
-    val predictionHorizonSeconds: Int = 60
+    val predictionHorizonSeconds: Int = 30
 ) {
 
     /**

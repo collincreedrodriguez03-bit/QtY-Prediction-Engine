@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoGraph
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -282,37 +283,40 @@ fun HeaderBar(
 /**
  * Tab 0: MAIN / PREDICTION
  * Centered around:
- * 1. Live Dynamic BTC Graph (Actual solid line & ~60s predicted trajectory)
- * 2. Primary Scalp Prediction Badge & Target
- * 3. Real Measured Live Scalp Accuracy Card
- * 4. Factual Data Connectivity & Status Table
+ * 1. 30s Scalp Prediction Banner & Target (Displayed prominently at the top)
+ * 2. Focused Live Dynamic BTC Graph (Actual solid line & +30s predicted dotted trajectory)
+ * 3. Connected Spot APIs Table (Real validated multi-exchange feeds)
+ * 4. Real Measured Live Scalp Accuracy Card
  */
 @Composable
 fun MainPredictionTab(engineState: EngineState) {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // 1. Centerpiece Live Graph
-        item {
-            BtcLivePredictionChart(engineState = engineState)
-        }
-
-        // 2. Scalp Signal & Directional Prediction Card
+        // 1. 30s Prediction Card (Prominently placed at the TOP above graph)
         item {
             PredictionCard(engineState = engineState)
         }
 
-        // 3. Measured Live Scalp Performance & Learning Card
+        // 2. Focused Centerpiece Live Graph
         item {
-            LivePerformanceCard(stats = engineState.performanceStats)
+            BtcLivePredictionChart(engineState = engineState)
         }
 
-        // 4. Data Connectivity & Market Data Table
+        // 3. Connected Spot APIs Table
         item {
-            DataConnectionsTable(sourceStatuses = engineState.sourceStatuses)
+            DataConnectionsTable(
+                sourceStatuses = engineState.sourceStatuses,
+                totalTicks = engineState.totalTicks
+            )
+        }
+
+        // 4. Measured Live Scalp Performance & Learning Card
+        item {
+            LivePerformanceCard(stats = engineState.performanceStats)
         }
     }
 }
@@ -322,7 +326,7 @@ fun PredictionCard(engineState: EngineState) {
     val pred = engineState.latestPrediction
     val decision = pred?.decision ?: "NO-TRADE"
     val score = pred?.score ?: 0.50
-    val horizon = pred?.predictionHorizon ?: 60
+    val horizon = pred?.predictionHorizon ?: 30
     val decisionColor = when (decision) {
         "UP" -> Color(0xFF00E676)
         "DOWN" -> Color(0xFFFF334B)
@@ -337,28 +341,47 @@ fun PredictionCard(engineState: EngineState) {
             .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
             .testTag("prediction_card")
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "NEXT ${horizon}s SCALP SIGNAL",
-                    color = Color(0xFF94A3B8),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
-                Text(
-                    text = "HORIZON: ${horizon}s",
-                    color = Color(0xFF64748B),
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.ElectricBolt,
+                        contentDescription = null,
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "30s PREDICTION",
+                        color = Color(0xFF00E5FF),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 1.sp
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(decisionColor.copy(alpha = 0.15f))
+                        .border(1.dp, decisionColor.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "30s HORIZON",
+                        color = decisionColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -368,7 +391,7 @@ fun PredictionCard(engineState: EngineState) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(44.dp)
+                            .size(38.dp)
                             .clip(CircleShape)
                             .background(decisionColor.copy(alpha = 0.15f))
                             .border(1.dp, decisionColor.copy(alpha = 0.5f), CircleShape),
@@ -378,22 +401,22 @@ fun PredictionCard(engineState: EngineState) {
                             imageVector = if (decision == "UP") Icons.Default.ArrowUpward else if (decision == "DOWN") Icons.Default.ArrowDownward else Icons.Default.PlayArrow,
                             contentDescription = decision,
                             tint = decisionColor,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
                             text = decision,
                             color = decisionColor,
-                            fontSize = 26.sp,
+                            fontSize = 22.sp,
                             fontWeight = FontWeight.Black,
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
                             text = "STRENGTH: ${pred?.strength ?: "NEUTRAL"}",
                             color = Color(0xFF94A3B8),
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
@@ -401,9 +424,9 @@ fun PredictionCard(engineState: EngineState) {
 
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "${Math.round(score * 100.0)}% SCORE",
+                        text = "SCORE: ${String.format(Locale.US, "%.2f", score)}",
                         color = Color.White,
-                        fontSize = 22.sp,
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace
                     )
@@ -411,25 +434,12 @@ fun PredictionCard(engineState: EngineState) {
                         Text(
                             text = "Target: $${String.format(Locale.US, "%,.2f", pred.predictedPrice)}",
                             color = Color(0xFF38BDF8),
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace
                         )
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Score Bar
-            LinearProgressIndicator(
-                progress = { score.toFloat() },
-                color = decisionColor,
-                trackColor = Color(0xFF1E293B),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp))
-            )
         }
     }
 }
@@ -562,7 +572,7 @@ fun LivePerformanceCard(stats: LivePerformanceStats) {
 
 /**
  * Tab 2: BACKTEST & AUDIT
- * Houses CCXT Replay Engine, Empirical Factor Attribution Matrix, Resolution History, and JSON Log Export.
+ * Houses CCXT Replay Engine, Cumulative Persistent Metrics, Factor Attribution Matrix, and JSON Log Export.
  */
 @Composable
 fun BacktestAndLogsTab(
@@ -571,6 +581,7 @@ fun BacktestAndLogsTab(
     onCopyJson: () -> Unit
 ) {
     val stats = uiState.engineState.performanceStats
+    val cumulative = uiState.cumulativeBacktest
 
     LazyColumn(
         modifier = Modifier
@@ -593,32 +604,126 @@ fun BacktestAndLogsTab(
                 if (uiState.isBacktesting) {
                     CircularProgressIndicator(color = Color.Black, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Running CCXT Replay...", color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text("Running 150-Cycle Backtest...", color = Color.Black, fontWeight = FontWeight.Bold)
                 } else {
-                    Text("RUN 150-CYCLE CCXT BACKTEST", color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text("RUN 150-CYCLE CCXT BACKTEST (30s HORIZON)", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             }
         }
 
-        // 2. Backtest Evaluation Results (if available)
-        if (uiState.backtestResult != null) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
-                        .testTag("backtest_metrics_card")
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+        // 2. Cumulative Backtest Performance Card
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
+                    .testTag("cumulative_backtest_card")
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            text = "BACKTEST EVALUATION METRICS (60s HORIZON)",
-                            color = Color(0xFF94A3B8),
+                            text = "CUMULATIVE BACKTEST METRICS (30s HORIZON)",
+                            color = Color(0xFF00E5FF),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.sp
                         )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFF1E293B))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "RUNS: ${cumulative.totalRuns}",
+                                color = Color(0xFF38BDF8),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "CUMULATIVE WIN RATE",
+                                color = Color(0xFF64748B),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            val winRateDisplay = if (cumulative.totalTrades > 0) "${cumulative.winRatePercent}%" else "0.0%"
+                            Text(
+                                text = winRateDisplay,
+                                color = if (cumulative.winRatePercent >= 60.0) Color(0xFF00E676) else if (cumulative.totalTrades > 0) Color(0xFFFFD600) else Color(0xFF64748B),
+                                fontSize = 32.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(text = "Total Samples: ${cumulative.totalSamples}", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                            Text(text = "Total Trades: ${cumulative.totalTrades}", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                            Text(text = "Correct: ${cumulative.correctPredictions}", color = Color(0xFF00E676), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                            Text(text = "Incorrect: ${cumulative.incorrectPredictions}", color = Color(0xFFFF334B), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Latest Backtest Run Details (if executed this session)
+        if (uiState.backtestResult != null) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0D1424)),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
+                        .testTag("latest_backtest_card")
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "HISTORICAL REPLAY RUN (150 CYCLES • 30s)",
+                                color = Color(0xFF94A3B8),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.8.sp
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFF1E293B))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "HISTORICAL BACKTEST",
+                                    color = Color(0xFF38BDF8),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
 
                         Spacer(modifier = Modifier.height(10.dp))
 
@@ -629,67 +734,109 @@ fun BacktestAndLogsTab(
                         ) {
                             Column {
                                 Text(
-                                    text = "DIRECTIONAL WIN RATE",
+                                    text = "MODEL WIN RATE",
                                     color = Color(0xFF64748B),
-                                    fontSize = 11.sp,
+                                    fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
                                     text = "${uiState.backtestResult.winRatePercent}%",
                                     color = if (uiState.backtestResult.winRatePercent >= 60.0) Color(0xFF00E676) else Color(0xFFFFD600),
-                                    fontSize = 32.sp,
+                                    fontSize = 24.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = FontFamily.Monospace
                                 )
                             }
 
                             Column(horizontalAlignment = Alignment.End) {
-                                Text(text = "Total Samples: ${uiState.backtestResult.totalSamples}", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                                Text(text = "Total Trades: ${uiState.backtestResult.totalTrades}", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                                Text(text = "Correct: ${uiState.backtestResult.correctPredictions}", color = Color(0xFF00E676), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                                Text(text = "Incorrect: ${uiState.backtestResult.incorrectPredictions}", color = Color(0xFFFF334B), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                Text(text = "UP / DOWN: ${uiState.backtestResult.upPredictions} / ${uiState.backtestResult.downPredictions}", color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                Text(text = "Trades: ${uiState.backtestResult.totalTrades}", color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                Text(text = "Correct: ${uiState.backtestResult.correctPredictions} • Incorrect: ${uiState.backtestResult.incorrectPredictions}", color = Color(0xFF38BDF8), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Baseline Comparisons
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFF090E17))
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "BENCHMARK BASELINES:",
+                                color = Color(0xFF64748B),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "Always-UP: ${uiState.backtestResult.baselineAlwaysUpWinRate}%",
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = "Always-DOWN: ${uiState.backtestResult.baselineAlwaysDownWinRate}%",
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
                             }
                         }
                     }
                 }
             }
+        }
 
+        // 4. Persistent Backtest Run History
+        if (cumulative.historyList.isNotEmpty()) {
             item {
-                Text(
-                    text = "SAMPLE BACKTEST PREDICTIONS (LAST 10)",
-                    color = Color(0xFF94A3B8),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
-            }
-
-            items(uiState.backtestResult.samplePredictions) { sample ->
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF090E17)),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(text = "Entry: $${String.format(Locale.US, "%,.1f", sample.currentPrice)} -> Pred: $${String.format(Locale.US, "%,.1f", sample.predictedPrice)}", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                            Text(text = "Actual: $${String.format(Locale.US, "%,.1f", sample.actualPrice ?: 0.0)}", color = Color(0xFF94A3B8), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                        }
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "PERSISTENT BACKTEST RUN HISTORY",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
 
-                        val resColor = when (sample.result) {
-                            "CORRECT" -> Color(0xFF00E676)
-                            "INCORRECT" -> Color(0xFFFF334B)
-                            else -> Color(0xFF64748B)
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(text = sample.decision, color = if (sample.decision == "UP") Color(0xFF00E676) else Color(0xFFFF334B), fontWeight = FontWeight.Bold, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-                            Text(text = sample.result ?: "PENDING", color = resColor, fontWeight = FontWeight.Bold, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        cumulative.historyList.take(5).forEachIndexed { idx, run ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Run #${cumulative.historyList.size - idx} • ${run.totalSamples} pts (${run.horizonSeconds}s)",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = "Trades: ${run.totalTrades} | ${run.winRatePercent}%",
+                                    color = if (run.winRatePercent >= 60.0) Color(0xFF00E676) else Color(0xFFFFD600),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
                         }
                     }
                 }

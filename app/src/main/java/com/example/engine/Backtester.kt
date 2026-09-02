@@ -12,7 +12,9 @@ data class BacktestResult(
     val correctPredictions: Int,
     val incorrectPredictions: Int,
     val winRatePercent: Double,
-    val samplePredictions: List<PredictionRecord>
+    val baselineAlwaysUpWinRate: Double = 50.0,
+    val baselineAlwaysDownWinRate: Double = 50.0,
+    val samplePredictions: List<PredictionRecord> = emptyList()
 )
 
 /**
@@ -22,12 +24,12 @@ data class BacktestResult(
  */
 class Backtester(
     private val indicatorCalculator: IndicatorCalculator = IndicatorCalculator(),
-    private val predictionEngine: PredictionEngine = PredictionEngine(predictionHorizonSeconds = 60)
+    private val predictionEngine: PredictionEngine = PredictionEngine(predictionHorizonSeconds = 30)
 ) {
 
     /**
      * Replays a list of sequential chronological PricePoints (e.g. at ~2s intervals)
-     * and evaluates prediction accuracy against actual 60-second forward prices.
+     * and evaluates prediction accuracy against actual 30-second forward prices.
      */
     fun runBacktest(prices: List<PricePoint>): BacktestResult {
         if (prices.size < 40) {
@@ -55,7 +57,11 @@ class Backtester(
         var correctCount = 0
         var incorrectCount = 0
 
-        val horizonSteps = 30 // 30 steps * 2s = 60s horizon
+        val horizonSteps = 15 // 15 steps * 2s = 30s horizon
+
+        var baselineUpWins = 0
+        var baselineDownWins = 0
+        var totalBaselineEvaluated = 0
 
         for (i in prices.indices) {
             val point = prices[i]
@@ -80,11 +86,14 @@ class Backtester(
                 timestamp = point.timestamp
             )
 
-            // Look forward 60 seconds (horizonSteps) if available
+            // Look forward 30 seconds (horizonSteps) if available
             val futureIndex = i + horizonSteps
             if (futureIndex < prices.size) {
                 val futurePrice = prices[futureIndex].price
                 prediction.actualPrice = futurePrice
+                totalBaselineEvaluated++
+                if (futurePrice > point.price) baselineUpWins++
+                if (futurePrice < point.price) baselineDownWins++
 
                 when (prediction.decision) {
                     "UP" -> {
@@ -119,6 +128,8 @@ class Backtester(
 
         val totalTrades = correctCount + incorrectCount
         val winRate = if (totalTrades > 0) (correctCount.toDouble() / totalTrades) * 100.0 else 0.0
+        val baseUpRate = if (totalBaselineEvaluated > 0) (baselineUpWins.toDouble() / totalBaselineEvaluated) * 100.0 else 50.0
+        val baseDownRate = if (totalBaselineEvaluated > 0) (baselineDownWins.toDouble() / totalBaselineEvaluated) * 100.0 else 50.0
 
         return BacktestResult(
             totalSamples = prices.size,
@@ -129,6 +140,8 @@ class Backtester(
             correctPredictions = correctCount,
             incorrectPredictions = incorrectCount,
             winRatePercent = Math.round(winRate * 10.0) / 10.0,
+            baselineAlwaysUpWinRate = Math.round(baseUpRate * 10.0) / 10.0,
+            baselineAlwaysDownWinRate = Math.round(baseDownRate * 10.0) / 10.0,
             samplePredictions = predictionList.takeLast(10)
         )
     }

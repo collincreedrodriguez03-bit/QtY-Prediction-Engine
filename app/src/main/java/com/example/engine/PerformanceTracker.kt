@@ -44,6 +44,22 @@ class PerformanceTracker {
     private val resolvedPredictions = mutableListOf<PredictionRecord>()
 
     @Synchronized
+    fun loadFromHistory(history: List<PredictionRecord>) {
+        val now = System.currentTimeMillis()
+        for (rec in history) {
+            if (rec.result != null && rec.result != "PENDING") {
+                if (resolvedPredictions.none { it.predictionId == rec.predictionId }) {
+                    resolvedPredictions.add(rec)
+                }
+            } else if (rec.maturityTimestamp > now) {
+                if (pendingPredictions.none { it.predictionId == rec.predictionId }) {
+                    pendingPredictions.add(rec)
+                }
+            }
+        }
+    }
+
+    @Synchronized
     fun registerPrediction(record: PredictionRecord) {
         pendingPredictions.add(record)
     }

@@ -73,7 +73,7 @@ fun BtcLivePredictionChart(
     }
     val decision = prediction?.decision ?: "NO-TRADE"
     val score = prediction?.score ?: 0.50
-    val horizon = prediction?.predictionHorizon ?: 60
+    val horizon = prediction?.predictionHorizon ?: 30
     val snapshot = engineState.latestSnapshot
 
     val decisionColor = when (decision) {
@@ -82,65 +82,20 @@ fun BtcLivePredictionChart(
         else -> Color(0xFF38BDF8)
     }
 
-    // Dynamic infinite animations for energy & live feed
-    val infiniteTransition = rememberInfiniteTransition(label = "graph_dynamics")
-
-    // Pulsing "NOW" aura
-    val pulseRadius by infiniteTransition.animateFloat(
-        initialValue = 4f,
-        targetValue = 12f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse_radius"
-    )
-
-    // Flowing animated phase for predicted dotted trajectory (dynamic live energy flow)
-    val dashPhase by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 28f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "dash_phase"
-    )
-
-    // Target beacon sonar radar expand
-    val sonarAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.8f,
-        targetValue = 0.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "sonar_alpha"
-    )
-    val sonarRadius by infiniteTransition.animateFloat(
-        initialValue = 4f,
-        targetValue = 18f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "sonar_radius"
-    )
-
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF0B1324)),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         modifier = modifier
             .fillMaxWidth()
-            .border(1.5.dp, Color(0xFF1E293B), RoundedCornerShape(16.dp))
+            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
             .testTag("btc_live_prediction_chart_card")
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(14.dp)
         ) {
-            // Header Row: Active Live Feed & Dynamic Target Pulse
+            // Header Row: BTC Spot Feed info
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -149,7 +104,7 @@ fun BtcLivePredictionChart(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(10.dp)
+                            .size(9.dp)
                             .clip(CircleShape)
                             .background(if (engineState.isRunning) Color(0xFF00E676) else Color(0xFFFF5252))
                     )
@@ -157,52 +112,37 @@ fun BtcLivePredictionChart(
                     Text(
                         text = "BTC / USDT",
                         color = Color.White,
-                        fontSize = 15.sp,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace,
                         letterSpacing = 1.sp
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFF1E293B))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = "${engineState.latestExchange} • 2s TICK",
-                            color = Color(0xFF38BDF8),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
+                    Text(
+                        text = "• ${engineState.latestExchange}",
+                        color = Color(0xFF64748B),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace
+                    )
                 }
 
-                // Prediction dynamic badge
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(decisionColor.copy(alpha = 0.18f))
-                        .border(1.dp, decisionColor.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.ElectricBolt,
-                            contentDescription = null,
-                            tint = decisionColor,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "+${horizon}s $decision (${(score * 100).toInt()}%)",
-                            color = decisionColor,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
+                // Clean 30s Target Delta Indicator
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "+30s TARGET: ",
+                        color = Color(0xFF64748B),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "$${String.format(Locale.US, "%,.1f", predictedPrice)}",
+                        color = decisionColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace
+                    )
                 }
             }
 
@@ -216,7 +156,7 @@ fun BtcLivePredictionChart(
             ) {
                 Column {
                     Text(
-                        text = "LIVE MARKET PRICE (t)",
+                        text = "LIVE SPOT PRICE (t)",
                         color = Color(0xFF64748B),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -225,18 +165,17 @@ fun BtcLivePredictionChart(
                     Text(
                         text = "$${String.format(Locale.US, "%,.2f", currentPrice)}",
                         color = Color.White,
-                        fontSize = 25.sp,
+                        fontSize = 24.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace
                     )
                 }
 
                 val priceDelta = predictedPrice - currentPrice
-                val deltaPct = if (currentPrice > 0) (priceDelta / currentPrice) * 100.0 else 0.0
 
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "+${horizon}s MODEL TARGET (t+${horizon}s)",
+                        text = "30s PROJECTED DELTA",
                         color = Color(0xFF64748B),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -244,17 +183,17 @@ fun BtcLivePredictionChart(
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "$${String.format(Locale.US, "%,.2f", predictedPrice)}",
+                            text = "${if (priceDelta >= 0) "+" else ""}$${String.format(Locale.US, "%.2f", priceDelta)}",
                             color = decisionColor,
-                            fontSize = 20.sp,
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Black,
                             fontFamily = FontFamily.Monospace
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "(${if (priceDelta >= 0) "+" else ""}${String.format(Locale.US, "%.2f", priceDelta)})",
+                            text = "($decision)",
                             color = decisionColor.copy(alpha = 0.9f),
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )
@@ -297,8 +236,8 @@ fun BtcLivePredictionChart(
                     val rightPadding = 56.dp.toPx()
                     val graphWidth = w - leftPadding - rightPadding
 
-                    // Historical segment takes 58% of chart, future 30s prediction takes 42%
-                    val nowX = leftPadding + (graphWidth * 0.58f)
+                    // Exact time-proportional division: 30s history (50%), 30s forecast (50%)
+                    val nowX = leftPadding + (graphWidth * 0.50f)
 
                     // Find bounds
                     var minP = historicalPrices.minOrNull() ?: currentPrice
@@ -346,7 +285,7 @@ fun BtcLivePredictionChart(
                         }
                     }
 
-                    // 2. "NOW" Live Divider
+                    // 2. "NOW" Vertical Time Divider
                     drawLine(
                         color = Color(0xFF00E5FF).copy(alpha = 0.55f),
                         start = Offset(nowX, 0f),
@@ -355,7 +294,7 @@ fun BtcLivePredictionChart(
                         pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
                     )
 
-                    // 3. Historical Solid Curve + Shaded Under-Area
+                    // 3. Historical Solid Curve + Clean Under-Area
                     if (historicalPrices.isNotEmpty()) {
                         val historyStep = (nowX - leftPadding) / (historicalPrices.size - 1).coerceAtLeast(1)
                         val linePath = Path()
@@ -388,7 +327,7 @@ fun BtcLivePredictionChart(
                             path = fillPath,
                             brush = Brush.verticalGradient(
                                 colors = listOf(
-                                    Color(0xFF00E5FF).copy(alpha = 0.22f),
+                                    Color(0xFF00E5FF).copy(alpha = 0.15f),
                                     Color(0xFF00E5FF).copy(alpha = 0.00f)
                                 ),
                                 startY = 0f,
@@ -396,22 +335,15 @@ fun BtcLivePredictionChart(
                             )
                         )
 
-                        // Outer line glow
-                        drawPath(
-                            path = linePath,
-                            color = Color(0xFF00E5FF).copy(alpha = 0.35f),
-                            style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
-                        )
-
-                        // Crisp inner line
+                        // Crisp solid line
                         drawPath(
                             path = linePath,
                             color = Color(0xFF00E5FF),
-                            style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
                         )
                     }
 
-                    // 4. Future Prediction Trajectory with Dynamic Animated Flow
+                    // 4. Future Prediction Trajectory (Clean 30s Dashed Path)
                     val targetX = leftPadding + graphWidth
                     val currentY = priceToY(currentPrice)
                     val targetY = priceToY(predictedPrice)
@@ -419,77 +351,52 @@ fun BtcLivePredictionChart(
                     val predPath = Path().apply {
                         moveTo(nowX, currentY)
                         val controlX = (nowX + targetX) / 2f
-                        val controlY = if (decision == "UP") min(currentY, targetY) - 12f else if (decision == "DOWN") max(currentY, targetY) + 12f else (currentY + targetY) / 2f
+                        val controlY = if (decision == "UP") min(currentY, targetY) - 10f else if (decision == "DOWN") max(currentY, targetY) + 10f else (currentY + targetY) / 2f
                         quadraticTo(controlX, controlY, targetX, targetY)
                     }
 
-                    // Shaded Confidence Corridor (Probability cone)
-                    val coneSpread = 16.dp.toPx()
-                    val conePath = Path().apply {
-                        moveTo(nowX, currentY)
-                        lineTo(targetX, targetY - coneSpread)
-                        lineTo(targetX, targetY + coneSpread)
-                        close()
-                    }
-                    drawPath(
-                        path = conePath,
-                        brush = Brush.horizontalGradient(
-                            colors = listOf(
-                                decisionColor.copy(alpha = 0.03f),
-                                decisionColor.copy(alpha = 0.18f)
-                            ),
-                            startX = nowX,
-                            endX = targetX
-                        )
-                    )
-
-                    // Animated Flowing Neon Dotted Path
+                    // Clean Dashed Predicted Trajectory Line
                     drawPath(
                         path = predPath,
                         color = decisionColor,
                         style = Stroke(
-                            width = 3.dp.toPx(),
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), -dashPhase),
+                            width = 2.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f),
                             cap = StrokeCap.Round
                         )
                     )
 
-                    // 5. Target Beacon at +30s with Expanding Sonar Ring
+                    // 5. Clean Target Point at +30s
                     drawCircle(
-                        color = decisionColor.copy(alpha = sonarAlpha * 0.4f),
-                        radius = sonarRadius.dp.toPx(),
-                        center = Offset(targetX, targetY)
-                    )
-                    drawCircle(
-                        color = decisionColor.copy(alpha = 0.30f),
-                        radius = 8.dp.toPx(),
+                        color = decisionColor.copy(alpha = 0.25f),
+                        radius = 6.dp.toPx(),
                         center = Offset(targetX, targetY)
                     )
                     drawCircle(
                         color = decisionColor,
-                        radius = 4.5.dp.toPx(),
+                        radius = 3.5.dp.toPx(),
                         center = Offset(targetX, targetY)
                     )
                     drawCircle(
                         color = Color.White,
-                        radius = 2.dp.toPx(),
+                        radius = 1.5.dp.toPx(),
                         center = Offset(targetX, targetY)
                     )
 
-                    // 6. Live "NOW" Pulsing Node
+                    // 6. Live "NOW" Spot Node
                     drawCircle(
-                        color = Color(0xFF00E5FF).copy(alpha = 0.30f),
-                        radius = pulseRadius.dp.toPx(),
+                        color = Color(0xFF00E5FF).copy(alpha = 0.25f),
+                        radius = 6.dp.toPx(),
                         center = Offset(nowX, currentY)
                     )
                     drawCircle(
                         color = Color(0xFF00E5FF),
-                        radius = 5.dp.toPx(),
+                        radius = 3.5.dp.toPx(),
                         center = Offset(nowX, currentY)
                     )
                     drawCircle(
                         color = Color.White,
-                        radius = 2.5.dp.toPx(),
+                        radius = 1.5.dp.toPx(),
                         center = Offset(nowX, currentY)
                     )
 
@@ -501,9 +408,9 @@ fun BtcLivePredictionChart(
                             isAntiAlias = true
                             typeface = android.graphics.Typeface.MONOSPACE
                         }
-                        drawText("-60s", leftPadding + 4f, h - 4f, timePaint)
+                        drawText("-30s", leftPadding + 4f, h - 4f, timePaint)
                         drawText("NOW (t)", nowX - 30f, h - 4f, timePaint.apply { color = android.graphics.Color.parseColor("#00e5ff") })
-                        drawText("+${horizon}s TARGET", targetX - 110f, h - 4f, timePaint.apply { color = if (decision == "UP") android.graphics.Color.parseColor("#00e676") else android.graphics.Color.parseColor("#ff334b") })
+                        drawText("+30s TARGET", targetX - 100f, h - 4f, timePaint.apply { color = if (decision == "UP") android.graphics.Color.parseColor("#00e676") else android.graphics.Color.parseColor("#ff334b") })
                     }
                 }
             }
@@ -523,7 +430,7 @@ fun BtcLivePredictionChart(
                     Spacer(modifier = Modifier.width(10.dp))
                     Box(modifier = Modifier.size(10.dp, 3.dp).background(decisionColor, RoundedCornerShape(2.dp)))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Predicted +${horizon}s Path", color = Color(0xFF94A3B8), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    Text("Predicted +30s Path", color = Color(0xFF94A3B8), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {

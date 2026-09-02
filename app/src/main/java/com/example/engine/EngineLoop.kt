@@ -4,13 +4,13 @@ import com.example.data.BtcDataFeed
 import com.example.data.ConsolidatedMarketState
 import com.example.data.DataSourceStatus
 import com.example.data.DataValidator
+import com.example.data.EngineRepository
 import com.example.data.ExchangeComparison
 import com.example.data.JsonPredictionLogger
 import com.example.data.MarketDataConsolidator
 import com.example.data.PriceHistory
 import com.example.data.PricePoint
 import com.example.data.SafeLog
-import com.example.data.ValidationResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,6 +35,7 @@ data class EngineState(
     val exchangeComparison: ExchangeComparison? = null,
     val consolidatedMarketState: ConsolidatedMarketState? = null,
     val sourceStatuses: Map<String, DataSourceStatus> = emptyMap(),
+    val totalTicks: Long = 0L,
     val latestSnapshot: IndicatorSnapshot? = null,
     val latestPrediction: PredictionRecord? = null,
     val recentPredictions: List<PredictionRecord> = emptyList(),
@@ -48,7 +49,7 @@ data class EngineState(
 /**
  * ~2-Second Prediction Loop Orchestrator.
  * Clean, non-blocking coroutine loop executing the core quantitative cycle:
- * RECEIVE (Multi-Exchange) -> CONSOLIDATE -> VERIFY -> BUILD -> WEIGH -> PREDICT (60s) -> PROJECT -> RESOLVE & LEARN -> REPEAT
+ * RECEIVE (Spot WebSockets) -> CONSOLIDATE -> VERIFY -> BUILD -> WEIGH -> PREDICT (30s) -> PROJECT -> RESOLVE & LEARN -> REPEAT
  */
 class EngineLoop(
     val dataFeed: BtcDataFeed = BtcDataFeed(),
@@ -56,13 +57,13 @@ class EngineLoop(
     val consolidator: MarketDataConsolidator = MarketDataConsolidator(),
     val priceHistory: PriceHistory = PriceHistory(300),
     val indicatorCalculator: IndicatorCalculator = IndicatorCalculator(),
-    val predictionEngine: PredictionEngine = PredictionEngine(),
+    val predictionEngine: PredictionEngine = PredictionEngine(predictionHorizonSeconds = 30),
     val performanceTracker: PerformanceTracker = PerformanceTracker(),
-    val logger: JsonPredictionLogger = JsonPredictionLogger()
+    val logger: JsonPredictionLogger = JsonPredictionLogger(),
+    val repository: EngineRepository? = null
 ) {
     private val scope = CoroutineScope(Dispatchers.Default)
     private var job: Job? = null
-    private var tickCollectorJob: Job? = null
 
     private val _state = MutableStateFlow(EngineState())
     val state: StateFlow<EngineState> = _state.asStateFlow()
@@ -74,24 +75,8 @@ class EngineLoop(
     fun start() {
         if (job?.isActive == true) return
 
-        // Start background multi-exchange streaming
+        // Start background multi-exchange WebSockets
         dataFeed.startStreaming()
-
-        // Fast tick observer for high-frequency price history updates
-        tickCollectorJob = scope.launch {
-            dataFeed.tickFlow.collect { tick ->
-                if (tick.price > 0.0) {
-                    priceHistory.add(tick)
-                    val currentPrices = priceHistory.getAll().map { it.price }
-                    _state.value = _state.value.copy(
-                        latestPrice = tick.price,
-                        latestTimestamp = tick.timestamp,
-                        latestExchange = tick.exchange,
-                        recentPrices = currentPrices
-                    )
-                }
-            }
-        }
 
         // Core 2.0-second Engine Heartbeat Loop
         job = scope.launch {
@@ -110,7 +95,7 @@ class EngineLoop(
 
                 // Compute exact sleep interval to maintain consistent 2000ms cycle cadence
                 val elapsed = System.currentTimeMillis() - cycleStartTime
-                val sleepTime = (2000L - elapsed).coerceAtLeast(100L)
+                val sleepTime = (2000L - elapsed).coerceAtLeast(200L)
                 delay(sleepTime)
             }
         }
@@ -119,80 +104,82 @@ class EngineLoop(
     fun stop() {
         job?.cancel()
         job = null
-        tickCollectorJob?.cancel()
-        tickCollectorJob = null
         dataFeed.stopStreaming()
         _state.value = _state.value.copy(isRunning = false)
     }
 
     /**
-     * Executes a single ~2-second quantitative prediction cycle synchronously within coroutine.
+     * Executes a single ~2-second quantitative prediction cycle.
      */
     suspend fun executeSingleCycle(timestamp: Long = System.currentTimeMillis()): PredictionRecord? {
         cycleCounter++
 
-        // 1. [RECEIVE & POLL] Fetch all available spot feeds (Binance, Coinbase, Kraken)
-        val binancePoint = dataFeed.fetchBinancePrice()
-        val krakenPoint = dataFeed.fetchKrakenPrice()
-        val coinbasePoint = dataFeed.fetchCoinbasePrice()
+        // 1. [GATHER SPOT QUOTES] Retrieve latest spot points from streaming WebSockets
+        val cachedSpots = dataFeed.getLatestSpotPoints().toMutableList()
 
-        val candidateSpotPoints = mutableListOf<PricePoint>()
-        binancePoint?.let { candidateSpotPoints.add(it) }
-        krakenPoint?.let { candidateSpotPoints.add(it) }
-        coinbasePoint?.let { candidateSpotPoints.add(it) }
-
-        // Also incorporate any other cached active spot ticks
-        val cachedSpots = dataFeed.getLatestSpotPoints()
-        for (spot in cachedSpots) {
-            if (candidateSpotPoints.none { it.exchange == spot.exchange }) {
-                candidateSpotPoints.add(spot)
-            }
+        // If WebSockets haven't populated yet, fetch via fast REST
+        if (cachedSpots.isEmpty()) {
+            dataFeed.fetchBinancePrice()?.let { cachedSpots.add(it) }
+            dataFeed.fetchCoinbasePrice()?.let { cachedSpots.add(it) }
+            dataFeed.fetchKrakenPrice()?.let { cachedSpots.add(it) }
         }
 
-        // 2. [CONSOLIDATE & VERIFY] Multi-source Mathematical Consolidation
-        val consolidatedState = consolidator.consolidate(candidateSpotPoints, timestamp)
+        val binancePoint = cachedSpots.find { it.exchange == "BINANCE" }
+        val krakenPoint = cachedSpots.find { it.exchange == "KRAKEN" }
+        val coinbasePoint = cachedSpots.find { it.exchange == "COINBASE" }
+
+        // 2. [CONSOLIDATE & VERIFY] Multi-exchange Mathematical Consolidation
+        val consolidatedState = consolidator.consolidate(cachedSpots, timestamp)
         val comparison = validator.validateCrossExchange(binancePoint, krakenPoint, coinbasePoint)
 
         val activePrice = if (consolidatedState.consolidatedPrice > 0.0) {
             consolidatedState.consolidatedPrice
         } else {
-            binancePoint?.price ?: krakenPoint?.price ?: coinbasePoint?.price ?: 0.0
+            binancePoint?.price ?: coinbasePoint?.price ?: krakenPoint?.price ?: (if (priceHistory.size() > 0) priceHistory.getLatest()?.price ?: 0.0 else 0.0)
         }
 
         if (activePrice <= 0.0) {
             _state.value = _state.value.copy(
                 cycleCount = cycleCounter,
                 sourceStatuses = dataFeed.sourceStatuses.value,
-                errorLog = "Failed to obtain valid market price from connected spot exchanges",
-                mathDisplay = "DATA FEEDS OFFLINE - RECONNECTING..."
+                totalTicks = dataFeed.getTotalTicks(),
+                errorLog = "Connecting to spot exchanges...",
+                mathDisplay = "CONNECTING SPOT EXCHANGES..."
             )
             return null
         }
 
-        val primaryExchange = if (consolidatedState.activeSpotFeeds.size > 1) "CONSOLIDATED SPOT" else (candidateSpotPoints.firstOrNull()?.exchange ?: "BINANCE")
+        val primaryExchange = if (consolidatedState.activeSpotFeeds.size > 1) "CONSOLIDATED SPOT" else (cachedSpots.firstOrNull()?.exchange ?: "BINANCE")
         val primaryPricePoint = PricePoint(
             price = activePrice,
             timestamp = timestamp,
             exchange = primaryExchange,
-            volume = candidateSpotPoints.sumOf { it.volume }.coerceAtLeast(1.0)
+            volume = cachedSpots.sumOf { it.volume }.coerceAtLeast(1.0)
         )
 
-        // 3. [BUILD] Update Rolling Price History
+        // 3. [BUILD TIME SERIES] Add one clean point per 2s cycle to rolling price history
         if (referencePrice == null) {
             referencePrice = activePrice
         }
         priceHistory.add(primaryPricePoint)
 
-        // 4. [RESOLVE & LEARN] Resolve matured 60s predictions against actual market price
+        // 4. [RESOLVE & LEARN] Resolve matured 30s predictions against actual market price
         val newlyResolved = performanceTracker.resolveMatured(
             currentPrice = activePrice,
             currentTimestamp = timestamp
         )
         for (resolved in newlyResolved) {
+            val resPrice = resolved.actualPrice ?: activePrice
+            val resResult = resolved.result ?: "PENDING"
             logger.updateResolvedRecord(
                 predictionId = resolved.predictionId,
-                actualPrice = resolved.actualPrice ?: activePrice,
-                result = resolved.result ?: "PENDING"
+                actualPrice = resPrice,
+                result = resResult
+            )
+            repository?.updatePredictionResolution(
+                predictionId = resolved.predictionId,
+                actualPrice = resPrice,
+                result = resResult
             )
         }
 
@@ -209,7 +196,7 @@ class EngineLoop(
         val perfStats = performanceTracker.computeStats(snapshot)
         val factorOffsets = perfStats.factorAttributions.associate { it.factorName to it.suggestedWeightOffset }
 
-        // 5. [WEIGH & PREDICT] Generate 60s Directional Prediction
+        // 5. [WEIGH & PREDICT] Generate 30s Directional Prediction
         val prediction = predictionEngine.predict(
             currentPrice = activePrice,
             snapshot = snapshot,
@@ -221,8 +208,28 @@ class EngineLoop(
         // 6. [RECORD & REGISTER]
         performanceTracker.registerPrediction(prediction)
         logger.log(prediction)
+        repository?.recordPrediction(prediction)
+        repository?.recordCycle(
+            timestamp = timestamp,
+            cycleNumber = cycleCounter,
+            btcPrice = activePrice,
+            primaryExchange = primaryExchange,
+            krakenPrice = krakenPoint?.price,
+            coinbasePrice = coinbasePoint?.price,
+            binancePrice = binancePoint?.price,
+            bitstampPrice = cachedSpots.find { it.exchange == "BITSTAMP" }?.price,
+            divergencePercent = consolidatedState.divergencePercent,
+            totalTicks = dataFeed.getTotalTicks()
+        )
+        if (perfStats.factorAttributions.isNotEmpty()) {
+            repository?.recordCalibrations(
+                attributions = perfStats.factorAttributions,
+                learningBias = perfStats.learningBiasAdjustment,
+                timestamp = timestamp
+            )
+        }
 
-        // 7. [EMIT STATE]
+        // 7. [EMIT IMMUTABLE STATE]
         val recent = logger.getRecentPredictions(10)
         val allHistoryPrices = priceHistory.getAll().map { it.price }
 
@@ -237,6 +244,7 @@ class EngineLoop(
             exchangeComparison = comparison,
             consolidatedMarketState = consolidatedState,
             sourceStatuses = dataFeed.sourceStatuses.value,
+            totalTicks = dataFeed.getTotalTicks(),
             latestSnapshot = snapshot,
             latestPrediction = prediction,
             recentPredictions = recent,
@@ -283,6 +291,25 @@ class EngineLoop(
 
         performanceTracker.registerPrediction(prediction)
         logger.log(prediction)
+
+        val recent = logger.getRecentPredictions(10)
+        val allHistoryPrices = priceHistory.getAll().map { it.price }
+
+        _state.value = EngineState(
+            isRunning = true,
+            cycleCount = cycleCounter,
+            latestPrice = point.price,
+            latestTimestamp = point.timestamp,
+            latestExchange = point.exchange,
+            latestSnapshot = snapshot,
+            latestPrediction = prediction,
+            recentPredictions = recent,
+            recentPrices = allHistoryPrices,
+            mathDisplay = prediction.inputs.formulaDisplay,
+            totalRecordedPredictions = logger.getAllPredictions().size,
+            performanceStats = perfStats
+        )
+
         return prediction
     }
 }
