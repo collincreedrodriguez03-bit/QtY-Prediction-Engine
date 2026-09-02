@@ -1,5 +1,5 @@
 {
-  "name": "QtY - Prediction Engine",
+  "name": "QtY",
   "description": "Real-Time BTC Scalping Prediction Engine (quantelemetry / QtY Phase 1)",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
