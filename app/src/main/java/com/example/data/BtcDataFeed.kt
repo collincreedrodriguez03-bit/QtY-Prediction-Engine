@@ -253,7 +253,7 @@ class BtcDataFeed(
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     val subMessage = JSONObject().apply {
                         put("type", "subscribe")
-                        put("product_ids", org.json.JSONArray(listOf("BTC-USD", "BTC-USDT")))
+                        put("product_ids", org.json.JSONArray(listOf("BTC-USD")))
                         put("channels", org.json.JSONArray(listOf("ticker")))
                     }
                     webSocket.send(subMessage.toString())
@@ -263,7 +263,8 @@ class BtcDataFeed(
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     try {
                         val json = JSONObject(text)
-                        if (json.optString("type") == "ticker") {
+                        val productId = json.optString("product_id")
+                        if (json.optString("type") == "ticker" && (productId.isEmpty() || productId == "BTC-USD")) {
                             val price = json.optString("price").toDoubleOrNull() ?: 0.0
                             val ask = json.optString("best_ask").toDoubleOrNull() ?: price
                             val bid = json.optString("best_bid").toDoubleOrNull() ?: price
@@ -343,7 +344,7 @@ class BtcDataFeed(
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     val subMessage = JSONObject().apply {
                         put("event", "subscribe")
-                        put("pair", org.json.JSONArray(listOf("XBT/USDT", "XBT/USD")))
+                        put("pair", org.json.JSONArray(listOf("XBT/USDT")))
                         put("subscription", JSONObject().apply { put("name", "ticker") })
                     }
                     webSocket.send(subMessage.toString())
@@ -355,6 +356,10 @@ class BtcDataFeed(
                         if (text.startsWith("[")) {
                             val jsonArr = org.json.JSONArray(text)
                             if (jsonArr.length() >= 2) {
+                                val pair = if (jsonArr.length() >= 4) jsonArr.optString(3) else ""
+                                if (pair.isNotEmpty() && pair != "XBT/USDT") {
+                                    return
+                                }
                                 val tickerData = jsonArr.optJSONObject(1)
                                 if (tickerData != null) {
                                     val closeArr = tickerData.optJSONArray("c")
@@ -408,7 +413,7 @@ class BtcDataFeed(
                     if (!body.isNullOrBlank()) {
                         val json = JSONObject(body)
                         val result = json.optJSONObject("result")
-                        val pairData = result?.optJSONObject("XBTUSDT") ?: result?.optJSONObject("XXBTZUSD")
+                        val pairData = result?.optJSONObject("XBTUSDT")
                         if (pairData != null) {
                             val c = pairData.optJSONArray("c")
                             val a = pairData.optJSONArray("a")

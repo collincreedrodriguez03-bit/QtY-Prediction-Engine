@@ -97,7 +97,8 @@ class PredictionEngine(
         snapshot: IndicatorSnapshot,
         timestamp: Long = System.currentTimeMillis(),
         learningBias: Double = 0.0,
-        factorOffsets: Map<String, Double> = emptyMap()
+        factorOffsets: Map<String, Double> = emptyMap(),
+        settlementReference: Double = currentPrice
     ): PredictionRecord {
         val emaSignal = normalizeEmaSignal(currentPrice, snapshot.ema9, snapshot.ema21)
         val rsiSignal = normalizeRsiSignal(snapshot.rsi)
@@ -177,6 +178,17 @@ class PredictionEngine(
         val expectedMoveRatio = (adjustedScore - 0.5) * 0.0015 * (predictionHorizonSeconds / 60.0)
         val predictedPrice = currentPrice * (1.0 + expectedMoveRatio)
 
+        // Calculate authorized 90-second projected price and direction
+        // Uses strictly current-time indicator signals and continuous scaling over 90s
+        val horizon90sSeconds = 90
+        val expectedMoveRatio90s = (adjustedScore - 0.5) * 0.0015 * (horizon90sSeconds / 60.0)
+        val projectedPrice90s = currentPrice * (1.0 + expectedMoveRatio90s)
+        val projectedDecision90s = when {
+            projectedPrice90s > settlementReference -> "UP"
+            projectedPrice90s < settlementReference -> "DOWN"
+            else -> decision
+        }
+
         // Generate visual mathematics display
         val mathFormula = buildMathDisplay(
             emaSignal, rsiSignal, momSignal, velSignal, volSignal, volumeSignal, bufSignal,
@@ -194,9 +206,12 @@ class PredictionEngine(
             strength = strength,
             predictedPrice = Math.round(predictedPrice * 100.0) / 100.0,
             currentPrice = Math.round(currentPrice * 100.0) / 100.0,
+            settlementReference = Math.round(settlementReference * 100.0) / 100.0,
             predictionHorizon = predictionHorizonSeconds,
             maturityTimestamp = timestamp + (predictionHorizonSeconds * 1000L),
-            calibratedScore = Math.round(calScore.coerceIn(0.0, 1.0) * 1000.0) / 1000.0
+            calibratedScore = Math.round(calScore.coerceIn(0.0, 1.0) * 1000.0) / 1000.0,
+            projectedPrice90s = Math.round(projectedPrice90s * 100.0) / 100.0,
+            projectedDecision90s = projectedDecision90s
         )
     }
 

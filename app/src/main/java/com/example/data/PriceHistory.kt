@@ -54,6 +54,28 @@ class PriceHistory(
     }
 
     /**
+     * Returns the defined settlement reference for the 15-minute Kalshi contract window.
+     * Contracts start on clock-aligned 15-minute boundaries (00, 15, 30, 45).
+     */
+    fun get15mContractSettlementReference(timestamp: Long): Double? {
+        val windowMs = 15 * 60 * 1000L
+        val intervalStart = timestamp - (timestamp % windowMs)
+        val list = history.toList()
+        if (list.isEmpty()) return null
+        val candidate = list.minByOrNull { kotlin.math.abs(it.timestamp - intervalStart) }
+        return candidate?.price ?: list.first().price
+    }
+
+    /**
+     * Returns the price observation nearest to the specified target timestamp.
+     */
+    fun getObservationAtTimestamp(targetTimestamp: Long): PricePoint? {
+        val list = history.toList()
+        if (list.isEmpty()) return null
+        return list.minByOrNull { kotlin.math.abs(it.timestamp - targetTimestamp) }
+    }
+
+    /**
      * Returns the latest price point if available.
      */
     fun getLatest(): PricePoint? {

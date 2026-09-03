@@ -23,11 +23,12 @@ data class ConsolidatedMarketState(
  * Explicit Mathematical Consolidator for Multiple BTC Spot Sources.
  *
  * Consolidation Method:
- * Given active fresh spot feeds { (P_i, V_i, Δt_i) }:
+ * Given active fresh spot feeds { (P_i, Δt_i) }:
  * - Freshness decay weight: w_i = exp(-λ * Δt_i)  (where λ = 0.4 / sec)
- * - Liquidity/Volume weight: l_i = sqrt(max(V_i, 0.1))
+ * - Volume units across exchanges (24h volume vs tick quantity vs ticker volume) are non-conforming
+ *   and incomparable, so weights rely strictly on freshness decay across conforming spot feeds.
  * - Consolidated Spot Price:
- *     P_consolidated = ∑(w_i * l_i * P_i) / ∑(w_i * l_i)
+ *     P_consolidated = ∑(w_i * P_i) / ∑(w_i)
  *
  * If cross-exchange divergence exceeds tolerance (> 0.20%), the algorithm computes
  * a trimmed median of conforming feeds and adjusts confidence accordingly.
@@ -100,8 +101,9 @@ class MarketDataConsolidator(
             provenance[pt.exchange] = pt
             val ageSec = max(0.0, (currentTimestamp - pt.timestamp) / 1000.0)
             val freshnessW = exp(-decayLambda * ageSec)
-            val liquidityW = sqrt(max(0.1, pt.volume))
-            val combinedW = freshnessW * liquidityW
+            // Weighting is based on freshness decay across conforming spot feeds,
+            // avoiding incomparable volume units (24h volume vs tick quantity)
+            val combinedW = freshnessW
 
             sumWeightedPrice += pt.price * combinedW
             sumWeights += combinedW

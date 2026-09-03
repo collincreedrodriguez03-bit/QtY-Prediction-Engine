@@ -1,5 +1,6 @@
 package com.example.engine
 
+import com.example.data.PricePoint
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -92,31 +93,67 @@ class PerformanceTracker {
 
     /**
      * Resolves all pending predictions that have reached or passed their maturity timestamp.
-     * Evaluates directional outcome strictly at t + 30s:
-     * - UP: winning if actualPrice > currentPrice; zero change or drop = INCORRECT
-     * - DOWN: winning if actualPrice < currentPrice; zero change or rise = INCORRECT
+     * Evaluates prediction validation strictly against the contract's defined settlement reference
+     * using the authentic 30-second observation (record.timestamp + 30s).
+     * - UP: winning if actualPrice > settlementReference; zero change or drop = INCORRECT
+     * - DOWN: winning if actualPrice < settlementReference; zero change or rise = INCORRECT
      * - NO-TRADE: marked NEUTRAL / NO_ACTION
      */
     @Synchronized
-    fun resolveMatured(currentPrice: Double, currentTimestamp: Long): List<PredictionRecord> {
+    fun resolveMatured(
+        currentPrice: Double,
+        currentTimestamp: Long,
+        priceHistory: List<PricePoint>? = null
+    ): List<PredictionRecord> {
         val newlyResolved = mutableListOf<PredictionRecord>()
         val iterator = pendingPredictions.iterator()
 
         while (iterator.hasNext()) {
             val record = iterator.next()
-            if (currentTimestamp >= record.maturityTimestamp) {
-                record.actualPrice = currentPrice
-                val priceDiff = currentPrice - record.currentPrice
 
-                record.result = when (record.decision) {
-                    "UP" -> if (priceDiff > 0.0) "CORRECT" else "INCORRECT"
-                    "DOWN" -> if (priceDiff < 0.0) "CORRECT" else "INCORRECT"
+            // 1. Resolve 30-second prediction at t + 30s
+            if (currentTimestamp >= record.maturityTimestamp && record.result30s == null) {
+                val eligible = priceHistory?.filter { it.timestamp >= record.timestamp }
+                val nearestPoint = eligible?.minByOrNull { abs(it.timestamp - record.maturityTimestamp) }
+                val observationPrice = nearestPoint?.price ?: currentPrice
+
+                record.actualPrice = observationPrice
+                record.actualPrice30s = observationPrice
+
+                val contractDelta = observationPrice - record.settlementReference
+                val outcome = when (record.decision) {
+                    "UP" -> if (contractDelta > 0.0) "CORRECT" else "INCORRECT"
+                    "DOWN" -> if (contractDelta < 0.0) "CORRECT" else "INCORRECT"
                     else -> "NO-TRADE"
                 }
+                record.result = outcome
+                record.result30s = outcome
 
-                resolvedPredictions.add(record)
+                if (!resolvedPredictions.contains(record)) {
+                    resolvedPredictions.add(record)
+                }
                 newlyResolved.add(record)
                 iterator.remove()
+            }
+        }
+
+        // 2. Resolve 90-second prediction at t + 90s on resolved history
+        for (record in resolvedPredictions) {
+            if (currentTimestamp >= record.maturityTimestamp90s && record.result90s == null) {
+                val eligible = priceHistory?.filter { it.timestamp >= record.timestamp }
+                val nearestPoint90s = eligible?.minByOrNull { abs(it.timestamp - record.maturityTimestamp90s) }
+                val observationPrice90s = nearestPoint90s?.price ?: currentPrice
+
+                record.actualPrice90s = observationPrice90s
+                val delta90s = observationPrice90s - record.settlementReference
+                record.result90s = when (record.projectedDecision90s) {
+                    "UP" -> if (delta90s > 0.0) "CORRECT" else "INCORRECT"
+                    "DOWN" -> if (delta90s < 0.0) "CORRECT" else "INCORRECT"
+                    else -> "NO-TRADE"
+                }
+                if (!newlyResolved.contains(record)) {
+                    newlyResolved.add(record)
+                }
             }
         }
 
@@ -174,7 +211,7 @@ class PerformanceTracker {
         var baseUpWins = 0
         var baseDownWins = 0
         for (trade in nonOverlappingTrades) {
-            val delta = (trade.actualPrice ?: trade.currentPrice) - trade.currentPrice
+            val delta = (trade.actualPrice ?: trade.settlementReference) - trade.settlementReference
             if (delta > 0.0) baseUpWins++
             if (delta < 0.0) baseDownWins++
         }
@@ -198,7 +235,7 @@ class PerformanceTracker {
         var globalUpWins = 0
         var globalDownWins = 0
         for (rec in globalNonOverlapping) {
-            val delta = (rec.actualPrice ?: rec.currentPrice) - rec.currentPrice
+            val delta = (rec.actualPrice ?: rec.settlementReference) - rec.settlementReference
             if (delta > 0.0) globalUpWins++
             if (delta < 0.0) globalDownWins++
         }
@@ -221,7 +258,7 @@ class PerformanceTracker {
             ((downCorrect.toDouble() / downTrades.size) * 1000.0).roundToInt() / 10.0
         } else 0.0
 
-        val totalDelta = validTrades.sumOf { (it.actualPrice ?: it.currentPrice) - it.currentPrice }
+        val totalDelta = validTrades.sumOf { (it.actualPrice ?: it.settlementReference) - it.settlementReference }
         val avgDelta = if (validTrades.isNotEmpty()) totalDelta / validTrades.size else 0.0
 
         // Market Regime Detection

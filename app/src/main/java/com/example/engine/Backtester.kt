@@ -123,10 +123,15 @@ class Backtester(
             )
             previousVelocity = snapshot.velocity
 
+            val windowMs = 15 * 60 * 1000L
+            val intervalStart = point.timestamp - (point.timestamp % windowMs)
+            val settlementRef = prices.minByOrNull { kotlin.math.abs(it.timestamp - intervalStart) }?.price ?: point.price
+
             val prediction = predictionEngine.predict(
                 currentPrice = point.price,
                 snapshot = snapshot,
-                timestamp = point.timestamp
+                timestamp = point.timestamp,
+                settlementReference = settlementRef
             )
 
             // Look forward 30 seconds (15 steps) if available
@@ -135,13 +140,13 @@ class Backtester(
                 val futurePrice = prices[futureIndex].price
                 prediction.actualPrice = futurePrice
 
-                val priceDelta = futurePrice - point.price
+                val contractDelta = futurePrice - prediction.settlementReference
 
                 // Operational Continuous Replay Evaluation (Every step)
                 when (prediction.decision) {
                     "UP" -> {
                         opUpCount++
-                        if (priceDelta > 0.0) {
+                        if (contractDelta > 0.0) {
                             prediction.result = "CORRECT"
                             opCorrectCount++
                         } else {
@@ -151,7 +156,7 @@ class Backtester(
                     }
                     "DOWN" -> {
                         opDownCount++
-                        if (priceDelta < 0.0) {
+                        if (contractDelta < 0.0) {
                             prediction.result = "CORRECT"
                             opCorrectCount++
                         } else {
@@ -169,30 +174,30 @@ class Backtester(
                 if (i - lastStatisticalIndex >= horizonSteps) {
                     lastStatisticalIndex = i
                     statGlobalBaseTotal++
-                    if (priceDelta > 0.0) statGlobalBaseUpWins++
-                    if (priceDelta < 0.0) statGlobalBaseDownWins++
+                    if (contractDelta > 0.0) statGlobalBaseUpWins++
+                    if (contractDelta < 0.0) statGlobalBaseDownWins++
 
                     when (prediction.decision) {
                         "UP" -> {
                             statUpCount++
                             statActiveBaseTotal++
-                            if (priceDelta > 0.0) {
+                            if (contractDelta > 0.0) {
                                 statCorrectCount++
                                 statActiveBaseUpWins++
                             } else {
                                 statIncorrectCount++
-                                if (priceDelta < 0.0) statActiveBaseDownWins++
+                                if (contractDelta < 0.0) statActiveBaseDownWins++
                             }
                         }
                         "DOWN" -> {
                             statDownCount++
                             statActiveBaseTotal++
-                            if (priceDelta < 0.0) {
+                            if (contractDelta < 0.0) {
                                 statCorrectCount++
                                 statActiveBaseDownWins++
                             } else {
                                 statIncorrectCount++
-                                if (priceDelta > 0.0) statActiveBaseUpWins++
+                                if (contractDelta > 0.0) statActiveBaseUpWins++
                             }
                         }
                         else -> {

@@ -17,6 +17,7 @@ import com.example.engine.EngineLoop
 import com.example.engine.EngineState
 import com.example.engine.IndicatorCalculator
 import com.example.engine.PredictionEngine
+import com.example.kalshi.KalshiAutomationEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,6 +56,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val validator = DataValidator()
     val database = AppDatabase.getDatabase(application)
     val repository = EngineRepository(database)
+    val kalshiAutomation = KalshiAutomationEngine(priceHistory = priceHistory)
 
     val engineLoop = EngineLoop(
         dataFeed = dataFeed,
@@ -63,7 +65,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         indicatorCalculator = indicatorCalc,
         predictionEngine = predictionEngine,
         logger = logger,
-        repository = repository
+        repository = repository,
+        kalshiAutomation = kalshiAutomation
     )
 
     val backtester = Backtester(
@@ -75,6 +78,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     init {
+        // Start background Kalshi contract discovery and order-book sync
+        kalshiAutomation.startSyncLoop()
+
         // Hydrate PerformanceTracker from permanent Room database on startup
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -162,12 +168,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (candles.size >= 40) {
                         candles
                     } else {
-                        backtester.generateSyntheticHistoricalData(
-                            startPrice = if (_uiState.value.engineState.latestPrice > 0) _uiState.value.engineState.latestPrice else 90000.0,
-                            count = sampleCount
-                        )
+                        emptyList()
                     }
                 }
+
+                // FAIL CLOSED: Never produce metrics or predictions from synthetic data
+                if (replayData.size < 40) {
+                    SafeLog.w("MainViewModel", "Insufficient authentic market data for backtest (available: ${replayData.size}, required: 40). Failing closed without synthetic fallback.")
+                    _uiState.value = _uiState.value.copy(
+                        isBacktesting = false,
+                        engineState = _uiState.value.engineState.copy(
+                            errorLog = "Backtest halted: Insufficient authentic market data (min 40 real observations required). Synthetic data disabled."
+                        )
+                    )
+                    return@launch
+                }
+
                 val result = backtester.runBacktest(replayData)
 
                 // Save backtest permanently to Room database
@@ -190,12 +206,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(activeTab = tab)
     }
 
+    fun toggleAutomation() {
+        val current = _uiState.value.engineState.isAutomationEnabled
+        kalshiAutomation.toggleAutomation(!current)
+        _uiState.value = _uiState.value.copy(
+            engineState = _uiState.value.engineState.copy(
+                isAutomationEnabled = !current
+            )
+        )
+    }
+
     fun getExportedJson(limit: Int = 10): String {
         return logger.exportFormattedJson(limit)
     }
 
     override fun onCleared() {
         super.onCleared()
+        kalshiAutomation.stopSyncLoop()
         engineLoop.stop()
     }
 }

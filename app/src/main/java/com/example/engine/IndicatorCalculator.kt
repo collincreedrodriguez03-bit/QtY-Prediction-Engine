@@ -219,12 +219,12 @@ class IndicatorCalculator {
         val volume = currentPoint.volume
         val volumeChange = calculateVolumeSurge(volumes, 5)
 
-        // Rolling anchor prevents buffer saturation during prolonged multi-hour sessions
-        val refPrice = referencePrice ?: if (points.size >= 45) {
-            // Rolling 45-cycle (90s) median/mean anchor
+        // Dynamic rolling anchor prevents buffer saturation during prolonged multi-hour sessions
+        val refPrice = if (points.size >= 45) {
+            // Rolling 45-cycle (90s) mean anchor
             points.takeLast(45).map { it.price }.average()
         } else {
-            points.first().price
+            referencePrice ?: points.first().price
         }
         val buffer = calculateBuffer(currentPoint.price, refPrice)
         val spread = calculateSpread(currentPoint.askPrice, currentPoint.bidPrice)

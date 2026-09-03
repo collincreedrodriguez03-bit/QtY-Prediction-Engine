@@ -49,12 +49,32 @@ class JsonPredictionLogger(
     }
 
     @Synchronized
-    fun updateResolvedRecord(predictionId: String, actualPrice: Double, result: String) {
+    fun updateResolvedRecord(
+        predictionId: String,
+        actualPrice: Double,
+        result: String,
+        actualPrice90s: Double? = null,
+        result90s: String? = null,
+        kalshiTicker: String? = null,
+        kalshiOrderId: String? = null,
+        kalshiOrderStatus: String? = null,
+        kalshiFilledCount: Int? = null,
+        kalshiOrderPrice: Int? = null
+    ) {
         val index = memoryLog.indexOfFirst { it.predictionId == predictionId }
         if (index != -1) {
             val rec = memoryLog[index]
             rec.actualPrice = actualPrice
+            rec.actualPrice30s = actualPrice
             rec.result = result
+            rec.result30s = result
+            if (actualPrice90s != null) rec.actualPrice90s = actualPrice90s
+            if (result90s != null) rec.result90s = result90s
+            if (kalshiTicker != null) rec.kalshiContractTicker = kalshiTicker
+            if (kalshiOrderId != null) rec.kalshiOrderId = kalshiOrderId
+            if (kalshiOrderStatus != null) rec.kalshiOrderStatus = kalshiOrderStatus
+            if (kalshiFilledCount != null) rec.kalshiFilledCount = kalshiFilledCount
+            if (kalshiOrderPrice != null) rec.kalshiOrderPrice = kalshiOrderPrice
         }
     }
 
@@ -74,6 +94,7 @@ class JsonPredictionLogger(
         obj.put("timestamp", record.timestamp)
         obj.put("isoTime", isoFormat.format(Date(record.timestamp)))
         obj.put("currentPrice", record.currentPrice)
+        obj.put("settlementReference", record.settlementReference)
         obj.put("predictedPrice", record.predictedPrice)
         obj.put("decision", record.decision)
         obj.put("score", record.score)
@@ -82,6 +103,22 @@ class JsonPredictionLogger(
         obj.put("maturityTimestamp", record.maturityTimestamp)
         obj.put("actualPrice", record.actualPrice ?: JSONObject.NULL)
         obj.put("result", record.result ?: "PENDING")
+
+        // 30s & 90s dual horizon tracking
+        obj.put("actualPrice30s", record.actualPrice30s ?: JSONObject.NULL)
+        obj.put("result30s", record.result30s ?: "PENDING")
+        obj.put("projectedPrice90s", record.projectedPrice90s)
+        obj.put("projectedDecision90s", record.projectedDecision90s)
+        obj.put("maturityTimestamp90s", record.maturityTimestamp90s)
+        obj.put("actualPrice90s", record.actualPrice90s ?: JSONObject.NULL)
+        obj.put("result90s", record.result90s ?: "PENDING")
+
+        // Kalshi order & execution details
+        obj.put("kalshiContractTicker", record.kalshiContractTicker ?: JSONObject.NULL)
+        obj.put("kalshiOrderId", record.kalshiOrderId ?: JSONObject.NULL)
+        obj.put("kalshiOrderStatus", record.kalshiOrderStatus ?: JSONObject.NULL)
+        obj.put("kalshiFilledCount", record.kalshiFilledCount ?: JSONObject.NULL)
+        obj.put("kalshiOrderPrice", record.kalshiOrderPrice ?: JSONObject.NULL)
 
         val inputsObj = JSONObject()
         val inp = record.inputs

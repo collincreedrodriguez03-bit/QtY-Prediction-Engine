@@ -94,6 +94,7 @@ class MainActivity : ComponentActivity() {
                     uiState = uiState,
                     onToggleEngine = { viewModel.toggleEngineLoop() },
                     onSingleCycle = { viewModel.triggerSingleCycle() },
+                    onToggleAutomation = { viewModel.toggleAutomation() },
                     onRunBacktest = { viewModel.runBacktestReplay(150) },
                     onTabSelected = { viewModel.setActiveTab(it) },
                     onCopyJson = {
@@ -113,6 +114,7 @@ fun QtYAppScreen(
     uiState: MainUiState,
     onToggleEngine: () -> Unit,
     onSingleCycle: () -> Unit,
+    onToggleAutomation: () -> Unit = {},
     onRunBacktest: () -> Unit,
     onTabSelected: (Int) -> Unit,
     onCopyJson: () -> Unit
@@ -130,7 +132,8 @@ fun QtYAppScreen(
             HeaderBar(
                 engineState = uiState.engineState,
                 onToggle = onToggleEngine,
-                onRefresh = onSingleCycle
+                onRefresh = onSingleCycle,
+                onToggleAutomation = onToggleAutomation
             )
 
             // 3-Part Navigation Structure:
@@ -207,7 +210,8 @@ fun QtYAppScreen(
 fun HeaderBar(
     engineState: EngineState,
     onToggle: () -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onToggleAutomation: () -> Unit = {}
 ) {
     Surface(
         color = Color(0xFF0F172A),
@@ -256,6 +260,41 @@ fun HeaderBar(
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // The single Automation ON/OFF control
+                Button(
+                    onClick = onToggleAutomation,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (engineState.isAutomationEnabled) Color(0xFF00E676).copy(alpha = 0.2f) else Color(0xFF1E293B),
+                        contentColor = if (engineState.isAutomationEnabled) Color(0xFF00E676) else Color(0xFF94A3B8)
+                    ),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier
+                        .height(30.dp)
+                        .border(
+                            1.dp,
+                            if (engineState.isAutomationEnabled) Color(0xFF00E676).copy(alpha = 0.6f) else Color(0xFF334155),
+                            RoundedCornerShape(6.dp)
+                        )
+                        .testTag("automation_toggle_button")
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(if (engineState.isAutomationEnabled) Color(0xFF00E676) else Color(0xFF64748B))
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (engineState.isAutomationEnabled) "AUTO ON" else "AUTO OFF",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
                 IconButton(
                     onClick = onRefresh,
                     modifier = Modifier.testTag("refresh_cycle_button")

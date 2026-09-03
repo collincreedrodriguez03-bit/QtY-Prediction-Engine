@@ -33,9 +33,24 @@ data class PredictionRecord(
     val strength: String, // "WEAK" | "MEDIUM" | "STRONG"
     val predictedPrice: Double,
     val currentPrice: Double = predictedPrice,
+    val settlementReference: Double = currentPrice,
     val predictionHorizon: Int = 30, // seconds
     val maturityTimestamp: Long = timestamp + (predictionHorizon * 1000L),
     val calibratedScore: Double? = null,
     var actualPrice: Double? = null,
-    var result: String? = null // "CORRECT" | "INCORRECT" | "PENDING"
+    var result: String? = null, // "CORRECT" | "INCORRECT" | "PENDING"
+    val projectedPrice90s: Double = predictedPrice,
+    val projectedDecision90s: String = decision,
+    // Dedicated 30-second and 90-second resolution evaluation fields
+    var actualPrice30s: Double? = null,
+    var result30s: String? = null,
+    val maturityTimestamp90s: Long = timestamp + 90_000L,
+    var actualPrice90s: Double? = null,
+    var result90s: String? = null,
+    // Kalshi order and execution lineage fields
+    var kalshiContractTicker: String? = null,
+    var kalshiOrderId: String? = null,
+    var kalshiOrderStatus: String? = null,
+    var kalshiFilledCount: Int? = null,
+    var kalshiOrderPrice: Int? = null
 )

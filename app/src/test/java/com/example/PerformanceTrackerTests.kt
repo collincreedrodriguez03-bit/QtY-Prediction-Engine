@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.data.PricePoint
 import com.example.engine.IndicatorSnapshot
 import com.example.engine.PerformanceTracker
 import com.example.engine.PredictionRecord
@@ -164,5 +165,63 @@ class PerformanceTrackerTests {
         val stats = tracker.computeStats(null)
         assertNotNull(stats.factorAttributions)
         assertTrue(stats.factorAttributions.any { it.factorName == "MOMENTUM" })
+    }
+
+    @Test
+    fun test30sResolutionObservationTiming() {
+        val now = 1700000000000L
+        val rec = createDummyRecord("UP", 90000.0, now) // maturityTimestamp = now + 30,000ms
+        tracker.registerPrediction(rec)
+
+        // Simulate price history points
+        val priceHistory = listOf(
+            PricePoint(price = 90000.0, timestamp = now, exchange = "BINANCE"),
+            PricePoint(price = 90050.0, timestamp = now + 15000L, exchange = "BINANCE"),
+            PricePoint(price = 90080.0, timestamp = now + 30000L, exchange = "BINANCE"), // exact 30s price
+            PricePoint(price = 89900.0, timestamp = now + 40000L, exchange = "BINANCE")  // delayed cycle price
+        )
+
+        // Delayed cycle arrives at now + 40,000ms with a dropped market price of $89,900
+        val resolved = tracker.resolveMatured(
+            currentPrice = 89900.0,
+            currentTimestamp = now + 40000L,
+            priceHistory = priceHistory
+        )
+
+        assertEquals(1, resolved.size)
+        // Must resolve to the 30-second observation (90080.0), NOT the delayed cycle price (89900.0)
+        assertEquals(90080.0, resolved[0].actualPrice)
+        assertEquals("CORRECT", resolved[0].result)
+    }
+
+    @Test
+    fun testContractSettlementReferenceValidation() {
+        val now = 1700000000000L
+        val strikeRef = 90100.0 // Contract defined strike reference
+
+        // Model trades UP at currentPrice 90050.0, but strikeRef is 90100.0
+        val rec = PredictionRecord(
+            timestamp = now,
+            decision = "UP",
+            score = 0.8,
+            strength = "STRONG",
+            currentPrice = 90050.0,
+            settlementReference = strikeRef,
+            predictedPrice = 90150.0,
+            predictionHorizon = 30,
+            maturityTimestamp = now + 30000L,
+            inputs = IndicatorSnapshot()
+        )
+        tracker.registerPrediction(rec)
+
+        // Price goes up to 90080.0 (higher than currentPrice 90050, but below contract reference 90100)
+        val resolved = tracker.resolveMatured(
+            currentPrice = 90080.0,
+            currentTimestamp = now + 30000L
+        )
+
+        assertEquals(1, resolved.size)
+        // Since price settled below the contract reference (90080 < 90100), the UP contract is INCORRECT
+        assertEquals("INCORRECT", resolved[0].result)
     }
 }
