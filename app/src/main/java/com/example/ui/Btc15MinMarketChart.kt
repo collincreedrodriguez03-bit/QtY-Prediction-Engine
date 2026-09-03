@@ -141,10 +141,10 @@ fun Btc15MinMarketChart(
 
             Spacer(modifier = Modifier.height(5.dp))
 
-            // Sub-header: Range summary & data provenance badge
+            // Sub-header: Range summary
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.Start,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -156,22 +156,6 @@ fun Btc15MinMarketChart(
                     maxLines = 1,
                     softWrap = false
                 )
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color(0xFF162032))
-                        .padding(horizontal = 5.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "AUTHENTIC SPOT ONLY",
-                        color = Color(0xFF64748B),
-                        fontSize = 8.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -271,8 +255,8 @@ fun Btc15MinMarketChart(
                             path = fillPath,
                             brush = Brush.verticalGradient(
                                 colors = listOf(
-                                    Color(0xFF38BDF8).copy(alpha = 0.12f),
-                                    Color(0xFF38BDF8).copy(alpha = 0.00f)
+                                    trendColor.copy(alpha = 0.12f),
+                                    trendColor.copy(alpha = 0.00f)
                                 ),
                                 startY = 0f,
                                 endY = h
@@ -282,18 +266,18 @@ fun Btc15MinMarketChart(
                         // Solid price curve
                         drawPath(
                             path = linePath,
-                            color = Color(0xFF38BDF8),
+                            color = trendColor,
                             style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round)
                         )
 
                         // Current Price Node at rightmost edge
                         drawCircle(
-                            color = Color(0xFF38BDF8).copy(alpha = 0.3f),
+                            color = trendColor.copy(alpha = 0.3f),
                             radius = 5.dp.toPx(),
                             center = Offset(lastX, lastY)
                         )
                         drawCircle(
-                            color = Color(0xFF38BDF8),
+                            color = trendColor,
                             radius = 3.dp.toPx(),
                             center = Offset(lastX, lastY)
                         )

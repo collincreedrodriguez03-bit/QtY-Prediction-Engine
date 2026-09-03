@@ -201,7 +201,7 @@ class EngineLoop(
             priceHistory = allPoints
         )
         for (resolved in newlyResolved) {
-            val resPrice = resolved.actualPrice ?: activePrice
+            val resPrice = resolved.actualPrice
             val resResult = resolved.result ?: "PENDING"
             logger.updateResolvedRecord(
                 predictionId = resolved.predictionId,
@@ -217,7 +217,7 @@ class EngineLoop(
             )
             repository?.updatePredictionResolution(
                 predictionId = resolved.predictionId,
-                actualPrice = resPrice,
+                actualPrice = resPrice ?: 0.0,
                 result = resResult
             )
         }

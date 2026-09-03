@@ -23,6 +23,7 @@ data class LivePerformanceStats(
     val operationalResolvedCount: Int = 0,
     val operationalCorrectCount: Int = 0,
     val operationalIncorrectCount: Int = 0,
+    val operationalUnresolvedCount: Int = 0,
     val operationalWinRatePercent: Double = 0.0,
 
     // 2. Statistical Non-Overlapping 30s Evaluation Stream (T, T+30s, T+60s, ...)
@@ -45,6 +46,7 @@ data class LivePerformanceStats(
     val totalResolved: Int = operationalResolvedCount,
     val correctCount: Int = operationalCorrectCount,
     val incorrectCount: Int = operationalIncorrectCount,
+    val unresolvedCount: Int = operationalUnresolvedCount,
     val winRatePercent: Double = operationalWinRatePercent,
 
     val upWinRatePercent: Double = 0.0,
@@ -111,23 +113,36 @@ class PerformanceTracker {
         while (iterator.hasNext()) {
             val record = iterator.next()
 
-            // 1. Resolve 30-second prediction at t + 30s
+            // 1. Resolve 30-second prediction at exact T + 30s
+            // Never evaluate prematurely before maturity
             if (currentTimestamp >= record.maturityTimestamp && record.result30s == null) {
-                val eligible = priceHistory?.filter { it.timestamp >= record.timestamp }
-                val nearestPoint = eligible?.minByOrNull { abs(it.timestamp - record.maturityTimestamp) }
-                val observationPrice = nearestPoint?.price ?: currentPrice
+                // Rule 9: No lookahead. Enforce that observations used for evaluation cannot exceed currentTimestamp.
+                // Rule 4, 5, 7, 8: Only authentic observation at exact maturityTimestamp (record.timestamp + 30s).
+                val eligible = priceHistory?.filter { it.timestamp in record.timestamp..currentTimestamp }
+                val exactPoint30s = eligible?.find { it.timestamp == record.maturityTimestamp }
 
-                record.actualPrice = observationPrice
-                record.actualPrice30s = observationPrice
+                if (exactPoint30s != null || currentTimestamp == record.maturityTimestamp) {
+                    val observationPrice = exactPoint30s?.price ?: currentPrice
 
-                val contractDelta = observationPrice - record.settlementReference
-                val outcome = when (record.decision) {
-                    "UP" -> if (contractDelta > 0.0) "CORRECT" else "INCORRECT"
-                    "DOWN" -> if (contractDelta < 0.0) "CORRECT" else "INCORRECT"
-                    else -> "NO-TRADE"
+                    record.actualPrice = observationPrice
+                    record.actualPrice30s = observationPrice
+
+                    val contractDelta = observationPrice - record.settlementReference
+                    val outcome = when (record.decision) {
+                        "UP" -> if (contractDelta > 0.0) "CORRECT" else "INCORRECT"
+                        "DOWN" -> if (contractDelta < 0.0) "CORRECT" else "INCORRECT"
+                        else -> "NO-TRADE"
+                    }
+                    record.result = outcome
+                    record.result30s = outcome
+                } else {
+                    // Rule 7 & 8: Never evaluate against a later observation simply because it arrived later.
+                    // If the exact maturity observation is unavailable, mark UNRESOLVED rather than substituting another timestamp.
+                    record.actualPrice = null
+                    record.actualPrice30s = null
+                    record.result = "UNRESOLVED"
+                    record.result30s = "UNRESOLVED"
                 }
-                record.result = outcome
-                record.result30s = outcome
 
                 if (!resolvedPredictions.contains(record)) {
                     resolvedPredictions.add(record)
@@ -137,20 +152,28 @@ class PerformanceTracker {
             }
         }
 
-        // 2. Resolve 90-second prediction at t + 90s on resolved history
+        // 2. Resolve authorized 90-second prediction at exact T + 90s on resolved history
         for (record in resolvedPredictions) {
+            // Never evaluate prematurely before 90s maturity
             if (currentTimestamp >= record.maturityTimestamp90s && record.result90s == null) {
-                val eligible = priceHistory?.filter { it.timestamp >= record.timestamp }
-                val nearestPoint90s = eligible?.minByOrNull { abs(it.timestamp - record.maturityTimestamp90s) }
-                val observationPrice90s = nearestPoint90s?.price ?: currentPrice
+                val eligible90s = priceHistory?.filter { it.timestamp in record.timestamp..currentTimestamp }
+                val exactPoint90s = eligible90s?.find { it.timestamp == record.maturityTimestamp90s }
 
-                record.actualPrice90s = observationPrice90s
-                val delta90s = observationPrice90s - record.settlementReference
-                record.result90s = when (record.projectedDecision90s) {
-                    "UP" -> if (delta90s > 0.0) "CORRECT" else "INCORRECT"
-                    "DOWN" -> if (delta90s < 0.0) "CORRECT" else "INCORRECT"
-                    else -> "NO-TRADE"
+                if (exactPoint90s != null || currentTimestamp == record.maturityTimestamp90s) {
+                    val observationPrice90s = exactPoint90s?.price ?: currentPrice
+                    record.actualPrice90s = observationPrice90s
+                    val delta90s = observationPrice90s - record.settlementReference
+                    record.result90s = when (record.projectedDecision90s) {
+                        "UP" -> if (delta90s > 0.0) "CORRECT" else "INCORRECT"
+                        "DOWN" -> if (delta90s < 0.0) "CORRECT" else "INCORRECT"
+                        else -> "NO-TRADE"
+                    }
+                } else {
+                    // Rule 7 & 8: If exact 90s observation is unavailable, mark UNRESOLVED without substituting another timestamp
+                    record.actualPrice90s = null
+                    record.result90s = "UNRESOLVED"
                 }
+
                 if (!newlyResolved.contains(record)) {
                     newlyResolved.add(record)
                 }
@@ -179,12 +202,15 @@ class PerformanceTracker {
         val allResolved = resolvedPredictions.toList()
         val validTrades = allResolved.filter { it.decision == "UP" || it.decision == "DOWN" }
         val noTrades = allResolved.filter { it.decision != "UP" && it.decision != "DOWN" }
+        val evaluatedTrades = validTrades.filter { it.result == "CORRECT" || it.result == "INCORRECT" }
+        val unresolvedTrades = validTrades.filter { it.result == "UNRESOLVED" }
 
-        val opCorrect = validTrades.count { it.result == "CORRECT" }
-        val opIncorrect = validTrades.count { it.result == "INCORRECT" }
+        val opCorrect = evaluatedTrades.count { it.result == "CORRECT" }
+        val opIncorrect = evaluatedTrades.count { it.result == "INCORRECT" }
+        val opUnresolved = unresolvedTrades.size
 
-        val opWinRate = if (validTrades.isNotEmpty()) {
-            ((opCorrect.toDouble() / validTrades.size) * 1000.0).roundToInt() / 10.0
+        val opWinRate = if (evaluatedTrades.isNotEmpty()) {
+            ((opCorrect.toDouble() / evaluatedTrades.size) * 1000.0).roundToInt() / 10.0
         } else {
             0.0
         }
@@ -201,25 +227,28 @@ class PerformanceTracker {
             }
         }
 
-        val statCorrect = nonOverlappingTrades.count { it.result == "CORRECT" }
-        val statIncorrect = nonOverlappingTrades.count { it.result == "INCORRECT" }
-        val statWinRate = if (nonOverlappingTrades.isNotEmpty()) {
-            ((statCorrect.toDouble() / nonOverlappingTrades.size) * 1000.0).roundToInt() / 10.0
+        val statEvaluated = nonOverlappingTrades.filter { it.result == "CORRECT" || it.result == "INCORRECT" }
+        val statCorrect = statEvaluated.count { it.result == "CORRECT" }
+        val statIncorrect = statEvaluated.count { it.result == "INCORRECT" }
+        val statWinRate = if (statEvaluated.isNotEmpty()) {
+            ((statCorrect.toDouble() / statEvaluated.size) * 1000.0).roundToInt() / 10.0
         } else 0.0
 
         // Benchmark Baselines evaluated on active model trade opportunities (same non-overlapping subset)
         var baseUpWins = 0
         var baseDownWins = 0
         for (trade in nonOverlappingTrades) {
-            val delta = (trade.actualPrice ?: trade.settlementReference) - trade.settlementReference
-            if (delta > 0.0) baseUpWins++
-            if (delta < 0.0) baseDownWins++
+            if (trade.actualPrice != null) {
+                val delta = trade.actualPrice!! - trade.settlementReference
+                if (delta > 0.0) baseUpWins++
+                if (delta < 0.0) baseDownWins++
+            }
         }
-        val baseUpRate = if (nonOverlappingTrades.isNotEmpty()) {
-            ((baseUpWins.toDouble() / nonOverlappingTrades.size) * 1000.0).roundToInt() / 10.0
+        val baseUpRate = if (statEvaluated.isNotEmpty()) {
+            ((baseUpWins.toDouble() / statEvaluated.size) * 1000.0).roundToInt() / 10.0
         } else 0.0
-        val baseDownRate = if (nonOverlappingTrades.isNotEmpty()) {
-            ((baseDownWins.toDouble() / nonOverlappingTrades.size) * 1000.0).roundToInt() / 10.0
+        val baseDownRate = if (statEvaluated.isNotEmpty()) {
+            ((baseDownWins.toDouble() / statEvaluated.size) * 1000.0).roundToInt() / 10.0
         } else 0.0
 
         // Global Non-Overlapping Baseline across ALL intervals (including NO-TRADE intervals)
@@ -234,41 +263,44 @@ class PerformanceTracker {
         }
         var globalUpWins = 0
         var globalDownWins = 0
-        for (rec in globalNonOverlapping) {
-            val delta = (rec.actualPrice ?: rec.settlementReference) - rec.settlementReference
+        val globalEvaluated = globalNonOverlapping.filter { it.actualPrice != null }
+        for (rec in globalEvaluated) {
+            val delta = rec.actualPrice!! - rec.settlementReference
             if (delta > 0.0) globalUpWins++
             if (delta < 0.0) globalDownWins++
         }
-        val globalUpRate = if (globalNonOverlapping.isNotEmpty()) {
-            ((globalUpWins.toDouble() / globalNonOverlapping.size) * 1000.0).roundToInt() / 10.0
+        val globalUpRate = if (globalEvaluated.isNotEmpty()) {
+            ((globalUpWins.toDouble() / globalEvaluated.size) * 1000.0).roundToInt() / 10.0
         } else 0.0
-        val globalDownRate = if (globalNonOverlapping.isNotEmpty()) {
-            ((globalDownWins.toDouble() / globalNonOverlapping.size) * 1000.0).roundToInt() / 10.0
+        val globalDownRate = if (globalEvaluated.isNotEmpty()) {
+            ((globalDownWins.toDouble() / globalEvaluated.size) * 1000.0).roundToInt() / 10.0
         } else 0.0
 
         val upTrades = validTrades.filter { it.decision == "UP" }
-        val upCorrect = upTrades.count { it.result == "CORRECT" }
-        val upWinRate = if (upTrades.isNotEmpty()) {
-            ((upCorrect.toDouble() / upTrades.size) * 1000.0).roundToInt() / 10.0
+        val upEvaluated = upTrades.filter { it.result == "CORRECT" || it.result == "INCORRECT" }
+        val upCorrect = upEvaluated.count { it.result == "CORRECT" }
+        val upWinRate = if (upEvaluated.isNotEmpty()) {
+            ((upCorrect.toDouble() / upEvaluated.size) * 1000.0).roundToInt() / 10.0
         } else 0.0
 
         val downTrades = validTrades.filter { it.decision == "DOWN" }
-        val downCorrect = downTrades.count { it.result == "CORRECT" }
-        val downWinRate = if (downTrades.isNotEmpty()) {
-            ((downCorrect.toDouble() / downTrades.size) * 1000.0).roundToInt() / 10.0
+        val downEvaluated = downTrades.filter { it.result == "CORRECT" || it.result == "INCORRECT" }
+        val downCorrect = downEvaluated.count { it.result == "CORRECT" }
+        val downWinRate = if (downEvaluated.isNotEmpty()) {
+            ((downCorrect.toDouble() / downEvaluated.size) * 1000.0).roundToInt() / 10.0
         } else 0.0
 
-        val totalDelta = validTrades.sumOf { (it.actualPrice ?: it.settlementReference) - it.settlementReference }
-        val avgDelta = if (validTrades.isNotEmpty()) totalDelta / validTrades.size else 0.0
+        val totalDelta = evaluatedTrades.sumOf { (it.actualPrice ?: it.settlementReference) - it.settlementReference }
+        val avgDelta = if (evaluatedTrades.isNotEmpty()) totalDelta / evaluatedTrades.size else 0.0
 
         // Market Regime Detection
         val regime = determineMarketRegime(currentSnapshot)
 
         // Empirical Factor Association Analysis (Labeled Non-Causal)
-        val factors = computeFactorAttributions(validTrades)
+        val factors = computeFactorAttributions(evaluatedTrades)
 
         // Closed-Loop Learning Bias Adjustment:
-        val recentWindow = validTrades.takeLast(20)
+        val recentWindow = evaluatedTrades.takeLast(20)
         val recentUpWins = recentWindow.filter { it.decision == "UP" && it.result == "CORRECT" }.size
         val recentDownWins = recentWindow.filter { it.decision == "DOWN" && it.result == "CORRECT" }.size
         val learningBias = if (recentWindow.isNotEmpty()) {
@@ -280,6 +312,7 @@ class PerformanceTracker {
             operationalResolvedCount = validTrades.size,
             operationalCorrectCount = opCorrect,
             operationalIncorrectCount = opIncorrect,
+            operationalUnresolvedCount = opUnresolved,
             operationalWinRatePercent = opWinRate,
             statisticalEvaluationCount = nonOverlappingTrades.size,
             statisticalCorrectCount = statCorrect,
@@ -289,6 +322,12 @@ class PerformanceTracker {
             baselineAlwaysDownWinRate = baseDownRate,
             globalBaselineAlwaysUpWinRate = globalUpRate,
             globalBaselineAlwaysDownWinRate = globalDownRate,
+            totalPredictions = pendingPredictions.size + resolvedPredictions.size,
+            totalResolved = validTrades.size,
+            correctCount = opCorrect,
+            incorrectCount = opIncorrect,
+            unresolvedCount = opUnresolved,
+            winRatePercent = opWinRate,
             upWinRatePercent = upWinRate,
             downWinRatePercent = downWinRate,
             totalUpTrades = upTrades.size,

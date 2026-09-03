@@ -184,6 +184,12 @@ class PredictionEngine(
         val expectedMoveRatio90s = (adjustedScore - 0.5) * 0.0015 * (horizon90sSeconds / 60.0)
         val projectedPrice90s = currentPrice * (1.0 + expectedMoveRatio90s)
         val projectedDecision90s = when {
+            decision == "DOWN" -> "DOWN"
+            decision == "UP" -> "UP"
+            projectedPrice90s > settlementReference && projectedPrice90s >= currentPrice -> "UP"
+            projectedPrice90s < settlementReference && projectedPrice90s <= currentPrice -> "DOWN"
+            projectedPrice90s < currentPrice -> "DOWN"
+            projectedPrice90s > currentPrice -> "UP"
             projectedPrice90s > settlementReference -> "UP"
             projectedPrice90s < settlementReference -> "DOWN"
             else -> decision

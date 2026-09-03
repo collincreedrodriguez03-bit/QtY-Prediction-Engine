@@ -242,36 +242,4 @@ class Backtester(
             samplePredictions = predictionList.takeLast(10)
         )
     }
-
-    /**
-     * Generates a realistic high-precision price sequence FOR ISOLATED UNIT TESTING AND SIMULATION ONLY.
-     * Not used in live engine prediction, validation, persistence, or live calibration paths.
-     */
-    fun generateSyntheticHistoricalData(
-        startPrice: Double = 90000.0,
-        count: Int = 200,
-        intervalMs: Long = 2000L,
-        baseTimestamp: Long = System.currentTimeMillis() - (200 * 2000L)
-    ): List<PricePoint> {
-        val list = mutableListOf<PricePoint>()
-        var price = startPrice
-        var time = baseTimestamp
-
-        for (i in 0 until count) {
-            val trendFactor = kotlin.math.sin(i / 15.0) * 8.0 + (kotlin.math.cos(i / 5.0) * 4.0)
-            price += trendFactor + (Math.random() - 0.48) * 12.0
-            time += intervalMs
-            list.add(
-                PricePoint(
-                    price = Math.round(price * 100.0) / 100.0,
-                    timestamp = time,
-                    exchange = "SIMULATED_TEST",
-                    volume = 0.5 + Math.random() * 2.0,
-                    bidPrice = price - 0.25,
-                    askPrice = price + 0.25
-                )
-            )
-        }
-        return list
-    }
 }

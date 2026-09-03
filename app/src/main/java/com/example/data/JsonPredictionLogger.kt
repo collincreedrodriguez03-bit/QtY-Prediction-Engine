@@ -51,7 +51,7 @@ class JsonPredictionLogger(
     @Synchronized
     fun updateResolvedRecord(
         predictionId: String,
-        actualPrice: Double,
+        actualPrice: Double?,
         result: String,
         actualPrice90s: Double? = null,
         result90s: String? = null,

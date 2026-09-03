@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.engine.Backtester
+import com.example.testutil.TestSyntheticDataGenerator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -11,7 +12,7 @@ class BacktesterTests {
     @Test
     fun testBacktestReplayExecution() {
         val backtester = Backtester()
-        val syntheticPrices = backtester.generateSyntheticHistoricalData(startPrice = 90000.0, count = 100)
+        val syntheticPrices = TestSyntheticDataGenerator.generateSyntheticHistoricalData(startPrice = 90000.0, count = 100)
 
         val result = backtester.runBacktest(syntheticPrices)
 

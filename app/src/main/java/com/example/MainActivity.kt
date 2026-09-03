@@ -355,129 +355,6 @@ fun MainPredictionTab(engineState: EngineState) {
 }
 
 @Composable
-fun PredictionCard(engineState: EngineState) {
-    val pred = engineState.latestPrediction
-    val decision = pred?.decision ?: "NO-TRADE"
-    val score = pred?.score ?: 0.50
-    val horizon = pred?.predictionHorizon ?: 30
-    val decisionColor = when (decision) {
-        "UP" -> Color(0xFF00E676)
-        "DOWN" -> Color(0xFFFF334B)
-        else -> Color(0xFF94A3B8)
-    }
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
-            .testTag("prediction_card")
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.ElectricBolt,
-                        contentDescription = null,
-                        tint = Color(0xFF00E5FF),
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "30s PREDICTION",
-                        color = Color(0xFF00E5FF),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.sp
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(decisionColor.copy(alpha = 0.15f))
-                        .border(1.dp, decisionColor.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "30s HORIZON",
-                        color = decisionColor,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(decisionColor.copy(alpha = 0.15f))
-                            .border(1.dp, decisionColor.copy(alpha = 0.5f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (decision == "UP") Icons.Default.ArrowUpward else if (decision == "DOWN") Icons.Default.ArrowDownward else Icons.Default.PlayArrow,
-                            contentDescription = decision,
-                            tint = decisionColor,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = decision,
-                            color = decisionColor,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            text = "STRENGTH: ${pred?.strength ?: "NEUTRAL"}",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "SCORE: ${String.format(Locale.US, "%.2f", score)}",
-                        color = Color.White,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    if (pred != null && pred.predictedPrice > 0.0) {
-                        Text(
-                            text = "Target: $${String.format(Locale.US, "%,.2f", pred.predictedPrice)}",
-                            color = Color(0xFF38BDF8),
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 fun LivePerformanceCard(stats: LivePerformanceStats) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
@@ -503,7 +380,7 @@ fun LivePerformanceCard(stats: LivePerformanceStats) {
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "LIVE EVALUATION METRICS",
+                        text = "LIVE SCALP ACCURACY",
                         color = Color(0xFF00E5FF),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Black,
@@ -537,16 +414,15 @@ fun LivePerformanceCard(stats: LivePerformanceStats) {
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Dual Stream Win Rate & Stat Matrix
+            // Minimal Live Win Rate & Resolved Counts
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Operational Stream (Continuous 2s Stream)
                 Column {
                     Text(
-                        text = "OPERATIONAL (2s STREAM)",
+                        text = "MEASURED WIN RATE",
                         color = Color(0xFF64748B),
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
@@ -557,7 +433,7 @@ fun LivePerformanceCard(stats: LivePerformanceStats) {
                         Text(
                             text = "${stats.operationalWinRatePercent}%",
                             color = wrColor,
-                            fontSize = 26.sp,
+                            fontSize = 28.sp,
                             fontWeight = FontWeight.Black,
                             fontFamily = FontFamily.Monospace,
                             maxLines = 1,
@@ -567,121 +443,28 @@ fun LivePerformanceCard(stats: LivePerformanceStats) {
                         Text(
                             text = "AWAITING...",
                             color = Color(0xFF94A3B8),
-                            fontSize = 16.sp,
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )
                     }
-                    Text(
-                        text = "Resolved: ${stats.operationalResolvedCount} / ${stats.operationalPredictionCount}",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
                 }
 
-                // Statistical Non-Overlapping Stream (T, T+30s, ...)
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "STATISTICAL (30s STREAM)",
-                        color = Color(0xFF64748B),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp
+                        text = "Resolved: ${stats.operationalResolvedCount} / ${stats.operationalPredictionCount}",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold
                     )
-                    if (stats.statisticalEvaluationCount > 0) {
-                        val statColor = if (stats.statisticalWinRatePercent >= 75.0) Color(0xFF00E676) else if (stats.statisticalWinRatePercent >= 50.0) Color(0xFF38BDF8) else Color(0xFFFFD600)
-                        Text(
-                            text = "${stats.statisticalWinRatePercent}%",
-                            color = statColor,
-                            fontSize = 26.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    } else {
-                        Text(
-                            text = "AWAITING...",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Samples: ${stats.statisticalEvaluationCount} (Non-Overlap)",
+                        text = "Correct: ${stats.operationalCorrectCount} • Incorrect: ${stats.operationalIncorrectCount}",
                         color = Color(0xFF38BDF8),
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace
                     )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Baselines Benchmarking Bar (Using identical non-overlapping samples)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0xFF090E17))
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "ACTIVE TRADE BASELINE:",
-                        color = Color(0xFF64748B),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "UP: ${stats.baselineAlwaysUpWinRate}%",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            text = "DOWN: ${stats.baselineAlwaysDownWinRate}%",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "GLOBAL INTERVAL BASELINE:",
-                        color = Color(0xFF64748B),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "UP: ${stats.globalBaselineAlwaysUpWinRate}%",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            text = "DOWN: ${stats.globalBaselineAlwaysDownWinRate}%",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
                 }
             }
         }
@@ -961,72 +744,7 @@ fun BacktestAndLogsTab(
             }
         }
 
-        // 3. Empirical Factor Attribution Card
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
-                    .testTag("factor_attribution_card")
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "EMPIRICAL FACTOR ATTRIBUTION & CALIBRATION",
-                        color = Color(0xFF00E5FF),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 0.8.sp
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    if (stats.factorAttributions.isEmpty()) {
-                        Text(
-                            text = "Calibrating empirical factor matrix with live data...",
-                            color = Color(0xFF64748B),
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    } else {
-                        stats.factorAttributions.forEach { factor ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 3.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = factor.factorName,
-                                    color = Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                                Text(
-                                    text = "Active: ${factor.totalTimesActive} • Win: ${factor.winRate}%",
-                                    color = if (factor.winRate >= 60.0) Color(0xFF00E676) else Color(0xFF94A3B8),
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                                val offsetStr = String.format(Locale.US, "%+.2f", factor.suggestedWeightOffset)
-                                Text(
-                                    text = "Δw: $offsetStr",
-                                    color = Color(0xFF38BDF8),
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 4. Structured JSON Logs Card
+        // 3. Structured JSON Logs Card
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF101726)),

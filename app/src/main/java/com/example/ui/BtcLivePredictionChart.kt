@@ -73,35 +73,24 @@ fun BtcLivePredictionChart(
     } else {
         currentPrice
     }
-    val projectedPrice90s = if (prediction != null && prediction.projectedPrice90s > 0.0) {
-        prediction.projectedPrice90s
-    } else {
-        predictedPrice
-    }
     val decision = prediction?.decision ?: "NO-TRADE"
-    val decision90s = prediction?.projectedDecision90s ?: decision
     val score = prediction?.score ?: 0.50
     val horizon = prediction?.predictionHorizon ?: 30
     val snapshot = engineState.latestSnapshot
 
-    val decisionColor = when (decision) {
-        "UP" -> Color(0xFF00E676)
-        "DOWN" -> Color(0xFFFF334B)
-        else -> Color(0xFF38BDF8)
-    }
-    val decisionColor90s = when (decision90s) {
-        "UP" -> Color(0xFF00E676)
-        "DOWN" -> Color(0xFFFF334B)
+    val isDown30s = decision == "DOWN" || predictedPrice < (currentPrice - 0.01)
+    val isUp30s = decision == "UP" || predictedPrice > (currentPrice + 0.01)
+    val decisionColor = when {
+        isDown30s -> Color(0xFFFF334B)
+        isUp30s -> Color(0xFF00E676)
         else -> Color(0xFF38BDF8)
     }
 
     val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
     val nowMs = if (engineState.latestTimestamp > 0) engineState.latestTimestamp else System.currentTimeMillis()
     val targetMs = nowMs + (horizon * 1000L)
-    val target90sMs = nowMs + 90000L
     val nowTimeStr = timeFormat.format(Date(nowMs))
     val targetTimeStr = timeFormat.format(Date(targetMs))
-    val target90sTimeStr = timeFormat.format(Date(target90sMs))
 
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF0B1324)),
@@ -170,9 +159,8 @@ fun BtcLivePredictionChart(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Price & Time Row: All CURRENT on the LEFT, all PREDICTION on the RIGHT
+            // Price & Time Row: All CURRENT on the LEFT, all 30s PREDICTION on the RIGHT
             val priceDelta = predictedPrice - currentPrice
-            val priceDelta90s = projectedPrice90s - currentPrice
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -227,7 +215,7 @@ fun BtcLivePredictionChart(
                     horizontalAlignment = Alignment.End
                 ) {
                     Text(
-                        text = "30s / 90s TARGETS",
+                        text = "30s TARGET",
                         color = Color(0xFF64748B),
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
@@ -263,7 +251,7 @@ fun BtcLivePredictionChart(
                         horizontalArrangement = Arrangement.End
                     ) {
                         Text(
-                            text = "30s: $targetTimeStr ($decision) • 90s: $${String.format(Locale.US, "%,.0f", projectedPrice90s)}",
+                            text = "TIME: $targetTimeStr ($decision)",
                             color = decisionColor,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Black,
@@ -309,17 +297,15 @@ fun BtcLivePredictionChart(
                     val rightPadding = 56.dp.toPx()
                     val graphWidth = w - leftPadding - rightPadding
 
-                    // Exact time-proportional division: 30s history (33%), 30s forecast (33%), 90s forecast (34%)
-                    // History covers -30s to 0 (ratio 0.33), 30s target is at ratio 0.66, 90s target is at ratio 1.00
-                    val nowX = leftPadding + (graphWidth * 0.35f)
-                    val target30sX = leftPadding + (graphWidth * 0.65f)
-                    val target90sX = leftPadding + graphWidth
+                    // Balanced 1:1 time division: 30s history on left half (-30s to NOW), 30s prediction on right half (NOW to +30s)
+                    val nowX = leftPadding + (graphWidth * 0.50f)
+                    val target30sX = leftPadding + graphWidth
 
-                    // Find bounds including current, 30s prediction, and 90s projection
+                    // Find bounds including current and 30s prediction
                     var minP = historicalPrices.minOrNull() ?: currentPrice
                     var maxP = historicalPrices.maxOrNull() ?: currentPrice
-                    minP = min(minP, min(currentPrice, min(predictedPrice, projectedPrice90s)))
-                    maxP = max(maxP, max(currentPrice, max(predictedPrice, projectedPrice90s)))
+                    minP = min(minP, min(currentPrice, predictedPrice))
+                    maxP = max(maxP, max(currentPrice, predictedPrice))
 
                     val spread = max(10.0, maxP - minP)
                     val yMin = minP - (spread * 0.22)
@@ -422,12 +408,11 @@ fun BtcLivePredictionChart(
                     // 4. Future Prediction Trajectory (Clean 30s Dashed Path)
                     val currentY = priceToY(currentPrice)
                     val target30sY = priceToY(predictedPrice)
-                    val target90sY = priceToY(projectedPrice90s)
 
                     val predPath = Path().apply {
                         moveTo(nowX, currentY)
                         val controlX = (nowX + target30sX) / 2f
-                        val controlY = if (decision == "UP") min(currentY, target30sY) - 10f else if (decision == "DOWN") max(currentY, target30sY) + 10f else (currentY + target30sY) / 2f
+                        val controlY = if (isDown30s) max(currentY, target30sY) + 10f else if (isUp30s) min(currentY, target30sY) - 10f else (currentY + target30sY) / 2f
                         quadraticTo(controlX, controlY, target30sX, target30sY)
                     }
 
@@ -442,25 +427,7 @@ fun BtcLivePredictionChart(
                         )
                     )
 
-                    // 4b. Future 90s Large Scale Projected Trajectory Path (Extended Horizon)
-                    val predPath90s = Path().apply {
-                        moveTo(target30sX, target30sY)
-                        val controlX90 = (target30sX + target90sX) / 2f
-                        val controlY90 = if (decision90s == "UP") min(target30sY, target90sY) - 8f else if (decision90s == "DOWN") max(target30sY, target90sY) + 8f else (target30sY + target90sY) / 2f
-                        quadraticTo(controlX90, controlY90, target90sX, target90sY)
-                    }
-
-                    drawPath(
-                        path = predPath90s,
-                        color = decisionColor90s.copy(alpha = 0.70f),
-                        style = Stroke(
-                            width = 1.8.dp.toPx(),
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(3f, 3f), 0f),
-                            cap = StrokeCap.Round
-                        )
-                    )
-
-                    // 5a. Clean Target Point at +30s
+                    // 5. Clean Target Point at +30s
                     drawCircle(
                         color = decisionColor.copy(alpha = 0.25f),
                         radius = 6.dp.toPx(),
@@ -475,23 +442,6 @@ fun BtcLivePredictionChart(
                         color = Color.White,
                         radius = 1.5.dp.toPx(),
                         center = Offset(target30sX, target30sY)
-                    )
-
-                    // 5b. Extended Target Point at +90s (Authorized Large Scale Horizon)
-                    drawCircle(
-                        color = decisionColor90s.copy(alpha = 0.20f),
-                        radius = 5.dp.toPx(),
-                        center = Offset(target90sX, target90sY)
-                    )
-                    drawCircle(
-                        color = decisionColor90s,
-                        radius = 3.dp.toPx(),
-                        center = Offset(target90sX, target90sY)
-                    )
-                    drawCircle(
-                        color = Color.White,
-                        radius = 1.2.dp.toPx(),
-                        center = Offset(target90sX, target90sY)
                     )
 
                     // 6. Live "NOW" Spot Node
@@ -521,8 +471,7 @@ fun BtcLivePredictionChart(
                         }
                         drawText("-30s", leftPadding + 4f, h - 4f, timePaint)
                         drawText("NOW (t)", nowX - 25f, h - 4f, timePaint.apply { color = android.graphics.Color.parseColor("#00e5ff") })
-                        drawText("+30s", target30sX - 16f, h - 4f, timePaint.apply { color = if (decision == "UP") android.graphics.Color.parseColor("#00e676") else android.graphics.Color.parseColor("#ff334b") })
-                        drawText("+90s", target90sX - 35f, h - 4f, timePaint.apply { color = if (decision90s == "UP") android.graphics.Color.parseColor("#00e676") else android.graphics.Color.parseColor("#ff334b") })
+                        drawText("+30s", target30sX - 35f, h - 4f, timePaint.apply { color = if (isDown30s) android.graphics.Color.parseColor("#ff334b") else if (isUp30s) android.graphics.Color.parseColor("#00e676") else android.graphics.Color.parseColor("#38bdf8") })
                     }
                 }
             }
@@ -542,11 +491,7 @@ fun BtcLivePredictionChart(
                     Spacer(modifier = Modifier.width(8.dp))
                     Box(modifier = Modifier.size(10.dp, 3.dp).background(decisionColor, RoundedCornerShape(2.dp)))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("+30s", color = Color(0xFF94A3B8), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Box(modifier = Modifier.size(10.dp, 3.dp).background(decisionColor90s.copy(alpha = 0.70f), RoundedCornerShape(2.dp)))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("+90s", color = Color(0xFF94A3B8), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    Text("+30s Target", color = Color(0xFF94A3B8), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -607,7 +552,7 @@ fun BtcLivePredictionChart(
                             ?: verif.marketPriceCents?.let { "${it}¢" }
                             ?: "N/A"
                         Text(
-                            text = "Bias: ${verif.marketBias} ($midText) • 30s: ${verif.agreement30s} • 90s: ${verif.agreement90s}",
+                            text = "Bias: ${verif.marketBias} ($midText) • Agreement: ${verif.agreement30s}",
                             color = Color(0xFF94A3B8),
                             fontSize = 8.5.sp,
                             fontFamily = FontFamily.Monospace,
