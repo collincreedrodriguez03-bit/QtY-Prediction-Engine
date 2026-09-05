@@ -76,7 +76,9 @@ data class PredictionRecord(
     var executionPrice: Double? = null,
     var kalshiClientOrderId: String? = null,
     var resolutionTimestamp: Long? = null,
-    var resolutionNotes: String? = null
+    var resolutionNotes: String? = null,
+    // Unified external research features container (Never alters core model weights)
+    val researchExternalFeatures: com.example.engine.external.ExternalPredictionFeatures? = null
 ) {
     val raw_model_score: Double get() = score
 }

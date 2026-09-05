@@ -253,3 +253,23 @@ data class KalshiAutomationState(
     val lastLifecycleState: OrderLifecycleState? = null,
     val isReconciliationFailed: Boolean = false
 )
+
+/**
+ * Result of the final fail-closed execution gate evaluation (Correction Pass 4/4 Mandate 3).
+ * Must be the LAST authority before order submission.
+ */
+sealed class ExecutionGateDecision {
+    data class Submit(
+        val market: KalshiMarket,
+        val clientOrderId: String,
+        val targetSide: String,
+        val displaySide: String,
+        val orderCount: Int,
+        val executablePriceCents: Int,
+        val riskEvaluation: RiskEvaluation,
+        val calculatedEdge: Double
+    ) : ExecutionGateDecision()
+
+    data class Reject(val reason: String) : ExecutionGateDecision()
+}
+

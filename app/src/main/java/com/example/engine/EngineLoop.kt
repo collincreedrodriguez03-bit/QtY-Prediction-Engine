@@ -52,7 +52,8 @@ data class EngineState(
     val kalshiVerification: KalshiVerificationResult? = null,
     val isAutomationEnabled: Boolean = false,
     val kalshiContractTicker: String? = null,
-    val kalshiValidationMessage: String? = null
+    val kalshiValidationMessage: String? = null,
+    val externalResearchFeatures: com.example.engine.external.ExternalPredictionFeatures? = null
 )
 
 /**
@@ -70,7 +71,8 @@ class EngineLoop(
     val performanceTracker: PerformanceTracker = PerformanceTracker(),
     val logger: JsonPredictionLogger = JsonPredictionLogger(),
     val repository: EngineRepository? = null,
-    val kalshiAutomation: KalshiAutomationEngine? = null
+    val kalshiAutomation: KalshiAutomationEngine? = null,
+    val externalFeatureCoordinator: com.example.engine.external.ExternalFeatureCoordinator = com.example.engine.external.ExternalFeatureCoordinator()
 ) {
     private val scope = CoroutineScope(Dispatchers.Default)
     private var job: Job? = null
@@ -242,6 +244,9 @@ class EngineLoop(
         // Determine 15-minute Kalshi contract defined settlement reference
         val contractSettlementRef = priceHistory.get15mContractSettlementReference(timestamp) ?: activePrice
 
+        // Research Features: strictly evaluated in parallel without altering production model weights
+        val researchFeatures = externalFeatureCoordinator.computeFeatures(allPoints, timestamp)
+
         // 5. [WEIGH & PREDICT] Generate Directional Prediction targeting 15m Contract Settlement Reference
         val rawPrediction = predictionEngine.predict(
             currentPrice = activePrice,
@@ -249,7 +254,8 @@ class EngineLoop(
             timestamp = timestamp,
             learningBias = perfStats.learningBiasAdjustment,
             factorOffsets = factorOffsets,
-            settlementReference = contractSettlementRef
+            settlementReference = contractSettlementRef,
+            researchFeatures = researchFeatures
         )
 
         // FAIL CLOSED: If cross-exchange feeds severely disagree, do NOT trade
@@ -328,7 +334,8 @@ class EngineLoop(
             kalshiVerification = kalState?.latestVerification,
             isAutomationEnabled = kalState?.isAutomationEnabled ?: false,
             kalshiContractTicker = kalState?.activeContract?.ticker,
-            kalshiValidationMessage = kalState?.contractValidationMessage
+            kalshiValidationMessage = kalState?.contractValidationMessage,
+            externalResearchFeatures = researchFeatures
         )
 
         return prediction

@@ -38,4 +38,19 @@ class DatabaseMigrationTest {
         assertTrue(AppDatabase.MIGRATION_4_5.startVersion == 4)
         assertTrue(AppDatabase.MIGRATION_4_5.endVersion == 5)
     }
+
+    @Test(expected = Exception::class)
+    fun testMigrationFailureIsNotSwallowedSilently() {
+        // When an invalid database throws on execution, MIGRATION_1_2 must throw rather than silently swallowing
+        val mockDb = java.lang.reflect.Proxy.newProxyInstance(
+            androidx.sqlite.db.SupportSQLiteDatabase::class.java.classLoader,
+            arrayOf(androidx.sqlite.db.SupportSQLiteDatabase::class.java)
+        ) { _, method, _ ->
+            if (method.name == "execSQL") {
+                throw android.database.sqlite.SQLiteException("Simulated disk/SQL corruption")
+            }
+            null
+        } as androidx.sqlite.db.SupportSQLiteDatabase
+        AppDatabase.MIGRATION_1_2.migrate(mockDb)
+    }
 }

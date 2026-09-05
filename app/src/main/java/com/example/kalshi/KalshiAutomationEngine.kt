@@ -107,6 +107,8 @@ class KalshiAutomationEngine(
         executionGeneration.incrementAndGet()
     }
 
+    fun getExecutionGenerationForTesting(): Long = executionGeneration.get()
+
     fun startSyncLoop() {
         if (syncJob?.isActive == true) return
         syncJob = scope.launch {
@@ -190,252 +192,52 @@ class KalshiAutomationEngine(
         }
 
         try {
-            // Automation OFF check inside mutex
-            if (!_state.value.isAutomationEnabled || executionGeneration.get() != currentExecutionGen) {
-                appendLog("Automation turned OFF. Aborting execution.")
-                return
-            }
+            val candidateClientOrderId = "qty_${activeMarket?.ticker ?: "KXBTC15M"}_${timestamp}_${UUID.randomUUID().toString().take(6)}"
 
-            // Trade Validation Audit
-            appendLog("Trade Validation: Order Book Verification Status = ${verification.verificationSummary} (30s: ${verification.agreement30s}, 90s: ${verification.agreement90s})")
-
-            // MANDATE 11: Fail Closed on NO-TRADE, stale, or zero price
-            if (prediction.decision != "UP" && prediction.decision != "DOWN") {
-                appendLog("Decision is ${prediction.decision} (NO-TRADE). Failing closed — no trade executed.")
-                return
-            }
-
-            if (currentBtcPrice <= 0.0 || currentBtcPrice.isNaN()) {
-                appendLog("Invalid current BTC price ($currentBtcPrice). Failing closed.")
-                return
-            }
-
-            // Stale market data check (must be within 15 seconds)
-            val latestPrice = priceHistory.getLatest()
-            if (latestPrice != null && (timestamp - latestPrice.timestamp) > 15_000L) {
-                appendLog("Market data is stale (${timestamp - latestPrice.timestamp} ms old > 15000 ms). Failing closed.")
-                return
-            }
-
-            // P0 Mandate 3: Order-Book Verification Hard Gate
-            // UNCONFIRMED, DIVERGENCE, UNAVAILABLE, STALE BOOK, CROSSED BOOK, NEUTRAL -> NO ORDER
-            if (verification.isStaleBook) {
-                appendLog("Execution blocked: Order book is stale (> 30s old). Failing closed.")
-                return
-            }
-            if (verification.isCrossedBook) {
-                appendLog("Execution blocked: Order book is crossed/inverted. Failing closed.")
-                return
-            }
-            if (verification.marketBias == "UNAVAILABLE") {
-                appendLog("Execution blocked: Market bias is UNAVAILABLE. Failing closed.")
-                return
-            }
-            if (verification.marketBias == "NEUTRAL") {
-                appendLog("Execution blocked: Market bias is NEUTRAL. Failing closed.")
-                return
-            }
-            if (verification.verificationSummary == "UNCONFIRMED") {
-                appendLog("Execution blocked: Order book verification is UNCONFIRMED. Failing closed.")
-                return
-            }
-            if (verification.verificationSummary == "DIVERGENCE") {
-                appendLog("Execution blocked: Order book verification shows DIVERGENCE. Failing closed.")
-                return
-            }
-            if (verification.verificationSummary == "NEUTRAL") {
-                appendLog("Execution blocked: Order book verification is NEUTRAL. Failing closed.")
-                return
-            }
-            val isVerifiedAgreement = (verification.verificationSummary == "FULL_AGREEMENT" ||
-                (verification.verificationSummary == "PARTIAL_AGREEMENT" && verification.agreement30s == "AGREEMENT"))
-            if (!isVerifiedAgreement) {
-                appendLog("Execution blocked: Verification summary '${verification.verificationSummary}' not approved. Failing closed.")
-                return
-            }
-
-            // Must be authenticated to trade
-            if (!currentState.isAuthenticated || !apiClient.isAuthenticated()) {
-                appendLog("Account not authenticated with Kalshi credentials. Failing closed.")
-                _state.value = _state.value.copy(error = "Kalshi credentials required for trading")
-                return
-            }
-
-            // MANDATE 5: Identify and Validate active contract & settlement methodology
-            if (activeMarket == null) {
-                appendLog("No active BTC 15m contract found on Kalshi. Failing closed.")
-                return
-            }
-
-            val validationResult = validateContract(activeMarket, currentBtcPrice, timestamp)
-            if (!validationResult.isValid) {
-                appendLog("Contract validation failed: ${validationResult.reason}. Failing closed.")
-                _state.value = _state.value.copy(contractValidationMessage = "Invalid: ${validationResult.reason}")
-                return
-            }
-
-            // MANDATE 7: Prevent duplicate orders for the same 15-minute contract
-            val lastTraded = tradedContracts[activeMarket.ticker] ?: 0L
-            if (lastTraded > 0L && (timestamp - lastTraded) < ORDER_COOLDOWN_MS) {
-                appendLog("Duplicate order prevention: Contract ${activeMarket.ticker} already traded recently. Skipping.")
-                return
-            }
-
-            // Durable duplicate check against execution store
-            val existingOrdersForContract = executionStore.getOrdersByContract(activeMarket.ticker)
-            val recentContractOrder = existingOrdersForContract.any {
-                (timestamp - it.placedTimestamp) < ORDER_COOLDOWN_MS ||
-                it.lifecycleState in listOf(
-                    OrderLifecycleState.SUBMITTING,
-                    OrderLifecycleState.SUBMITTED,
-                    OrderLifecycleState.PARTIALLY_FILLED,
-                    OrderLifecycleState.CANCEL_PENDING
-                )
-            }
-            if (recentContractOrder) {
-                appendLog("Duplicate order prevention: Contract ${activeMarket.ticker} has recent or active order in store. Skipping.")
-                return
-            }
-
-            // Prevent duplicate orders if an active resting order exists
-            val hasResting = currentState.recentOrders.any {
-                it.ticker == activeMarket.ticker && it.status.equals("resting", ignoreCase = true)
-            }
-            if (hasResting) {
-                appendLog("Duplicate order prevention: Active resting order exists on ${activeMarket.ticker}. Skipping.")
-                return
-            }
-
-            // Determine side based on QtY Prediction:
-            // UP -> buy "yes" contract via side = "bid"
-            // DOWN -> economically buy "no" (sell "yes") via side = "ask"
-            val targetSide = if (prediction.decision == "UP") "bid" else "ask"
-            val displaySide = if (targetSide == "bid") "yes" else "no"
-
-            // Prevent position mismatch / conflicting opposing trade
-            val currentPos = currentState.activePositions.find { it.ticker == activeMarket.ticker }?.position ?: 0
-            if (targetSide == "bid" && currentPos < 0) {
-                appendLog("Position mismatch: Account holds opposite NO position ($currentPos) on ${activeMarket.ticker}. Failing closed.")
-                return
-            } else if (targetSide == "ask" && currentPos > 0) {
-                appendLog("Position mismatch: Account holds opposite YES position ($currentPos) on ${activeMarket.ticker}. Failing closed.")
-                return
-            }
-
-            // ORDER-BOOK HARD EXECUTION GATE (Requirements 4, 5, 6)
-            // Verify timestamp freshness, bid/ask validity, non-crossed, executable side, depth, and non-fabricated price
-            val bookValidation = validateOrderBookForExecution(
-                orderBook = orderBook,
-                targetContractTicker = activeMarket.ticker,
-                targetSide = targetSide,
-                requiredCount = 1,
-                nowMs = timestamp
-            )
-            if (!bookValidation.isValid) {
-                appendLog("Execution blocked by Order-Book Gate: ${bookValidation.reason}. Failing closed.")
-                return
-            }
-            val executablePriceCents = bookValidation.executablePriceCents
-            if (executablePriceCents !in 1..99) {
-                appendLog("Execution blocked: Executable price $executablePriceCents¢ is invalid. Failing closed.")
-                return
-            }
-
-            // EXECUTABLE PRICE EDGE (Requirement 7)
-            // Calculate whether QtY's predicted probability provides a genuine statistical edge versus the actual executable Kalshi price.
-            // Edge = model_probability - executable_market_probability
-            val (modelProb, marketProb, calculatedEdge) = if (prediction.decision == "UP") {
-                val mProb = prediction.score
-                val mktProb = executablePriceCents / 100.0
-                Triple(mProb, mktProb, mProb - mktProb)
-            } else {
-                val mProb = 1.0 - prediction.score
-                // For selling YES / buying NO, market probability of DOWN is (100 - executablePriceCents) / 100.0
-                val mktProb = (100 - executablePriceCents) / 100.0
-                Triple(mProb, mktProb, mProb - mktProb)
-            }
-
-            appendLog(
-                "Executable Edge Check: Model P=${String.format(java.util.Locale.US, "%.1f", modelProb * 100)}% vs " +
-                "Market P=${String.format(java.util.Locale.US, "%.1f", marketProb * 100)}% -> " +
-                "Edge=${String.format(java.util.Locale.US, "%+.2f", calculatedEdge * 100)}% (Min: ${(MIN_EXECUTABLE_EDGE * 100)}%)"
-            )
-
-            if (calculatedEdge < MIN_EXECUTABLE_EDGE) {
-                appendLog(
-                    "Execution blocked: Calculated edge (${String.format(java.util.Locale.US, "%.2f", calculatedEdge * 100)}%) " +
-                    "is below minimum required threshold (${(MIN_EXECUTABLE_EDGE * 100)}%). Directional agreement alone does not " +
-                    "constitute a trading edge. Defaulting to NO-TRADE."
-                )
-                return
-            }
-
-            // HARD EXPOSURE & LOSS CHECK (Requirements 6 & 7)
-            val openPositionsExposure = currentState.activePositions.sumOf { it.marketExposureCents / 100.0 }
-            val restingOrdersExposure = currentState.recentOrders
-                .filter { it.status.equals("resting", ignoreCase = true) }
-                .sumOf { (it.count * it.price) / 100.0 }
-            val currentExposureDollars = openPositionsExposure + restingOrdersExposure
-
-            // P0 Mandate 4 & 5: Risk-Based Position Sizing & Profit-Only Capital Rule
-            val volBps = (prediction.inputs.volatility / currentBtcPrice) * 10000.0
-            val riskEval = riskEngine.evaluateOrderSizing(
+            // MANDATE 3: Evaluate ONE FINAL FAIL-CLOSED EXECUTION GATE as the LAST authority
+            val gateDecision = evaluateFinalExecutionGate(
                 prediction = prediction,
-                contractPriceCents = executablePriceCents,
-                volatilityBps = volBps,
-                currentExposureDollars = currentExposureDollars
+                currentBtcPrice = currentBtcPrice,
+                timestamp = timestamp,
+                currentExecutionGen = currentExecutionGen,
+                clientOrderId = candidateClientOrderId
             )
+
+            val submitDecision = when (gateDecision) {
+                is ExecutionGateDecision.Reject -> {
+                    appendLog("Execution blocked by Final Execution Gate: ${gateDecision.reason}. Failing closed — no order submitted.")
+                    if (gateDecision.reason.contains("credentials", ignoreCase = true) || gateDecision.reason.contains("authenticated", ignoreCase = true)) {
+                        _state.value = _state.value.copy(error = "Kalshi credentials required for trading")
+                    } else if (gateDecision.reason.contains("balance", ignoreCase = true)) {
+                        _state.value = _state.value.copy(error = "Insufficient Kalshi balance")
+                    } else if (gateDecision.reason.contains("Contract invalid", ignoreCase = true)) {
+                        _state.value = _state.value.copy(contractValidationMessage = gateDecision.reason)
+                    }
+                    return
+                }
+                is ExecutionGateDecision.Submit -> gateDecision
+            }
+
+            val targetMarket = submitDecision.market
+            val clientOrderId = submitDecision.clientOrderId
+            val targetSide = submitDecision.targetSide
+            val displaySide = submitDecision.displaySide
+            val orderCount = submitDecision.orderCount
+            val executablePriceCents = submitDecision.executablePriceCents
+            val riskEval = submitDecision.riskEvaluation
+            val calculatedEdge = submitDecision.calculatedEdge
+
+            submittedClientOrderIds.add(clientOrderId)
+
             appendLog(
-                "Risk & Capital Audit: Trade #${riskEngine.getTradeCount() + 1} | " +
-                "Eligible Realized-Profit Capital: $${String.format(java.util.Locale.US, "%.2f", riskEval.eligibleCapitalDollars)} | " +
-                "Risk Allocation: ${(riskEval.allocationFraction * 100).toInt()}% (${riskEval.riskLevel.name}) | " +
-                "Actual Order Size: ${riskEval.actualOrderSize} contract(s)"
+                "Final Execution Gate APPROVED: $targetSide ($displaySide) $orderCount contract(s) @ ${executablePriceCents}¢ | " +
+                "Edge=${String.format(java.util.Locale.US, "%+.2f", calculatedEdge * 100)}% | " +
+                "Risk=${riskEval.riskLevel.name} (${(riskEval.allocationFraction * 100).toInt()}%)"
             )
-
-            if (!riskEval.isApproved || riskEval.actualOrderSize <= 0) {
-                appendLog("Order blocked by Risk Engine: ${riskEval.reason}. Failing closed.")
-                return
-            }
-
-            // MANDATE 8: Small trade-size enforcement bounded by hard limit and risk engine
-            val orderCount = minOf(riskEval.actualOrderSize, tradeSizeLimit.coerceIn(1, MAX_CONTRACTS_PER_ORDER))
-
-            // Check depth can actually support the sized order count
-            if (bookValidation.availableDepth < orderCount) {
-                appendLog("Execution blocked: Available book depth (${bookValidation.availableDepth}) is less than sized order count ($orderCount). Failing closed.")
-                return
-            }
-
-            // BALANCE/COST CHECK (Requirement 11)
-            // Calculate expected required funds from actual executable price, quantity, and applicable fees.
-            val contractRiskCents = if (targetSide == "bid") {
-                orderCount * executablePriceCents.toLong()
-            } else {
-                orderCount * (100L - executablePriceCents)
-            }
-            val estimatedFeesCents = orderCount * 2L // ~2¢ per contract Kalshi taker fee
-            val totalRequiredFundsCents = contractRiskCents + estimatedFeesCents
-
-            if (currentState.balance.balanceCents < totalRequiredFundsCents) {
-                appendLog(
-                    "Insufficient balance: Available $${currentState.balance.balanceDollars} USD < required " +
-                    "$${String.format(java.util.Locale.US, "%.2f", totalRequiredFundsCents / 100.0)} USD (Contracts: " +
-                    "$${String.format(java.util.Locale.US, "%.2f", contractRiskCents / 100.0)} + Fees: " +
-                    "$${String.format(java.util.Locale.US, "%.2f", estimatedFeesCents / 100.0)}). Failing closed."
-                )
-                _state.value = _state.value.copy(error = "Insufficient Kalshi balance")
-                return
-            }
-
-            val clientOrderId = "qty_${activeMarket.ticker}_${timestamp}_${UUID.randomUUID().toString().take(6)}"
-            if (!submittedClientOrderIds.add(clientOrderId) || executionStore.getOrderByClientOrderId(clientOrderId) != null) {
-                appendLog("Duplicate clientOrderId detected ($clientOrderId). Failing closed.")
-                return
-            }
 
             // V2 EVENT ORDER REQUEST (Requirement 3)
             val orderRequest = KalshiOrderRequest(
-                ticker = activeMarket.ticker,
+                ticker = targetMarket.ticker,
                 clientOrderId = clientOrderId,
                 side = targetSide,
                 count = orderCount,
@@ -445,17 +247,10 @@ class KalshiAutomationEngine(
                 selfTradePreventionType = "taker_at_cross"
             )
 
-            // AUTOMATION OFF SAFETY: Verify state immediately before submission (Requirement 9)
-            if (!_state.value.isAutomationEnabled || executionGeneration.get() != currentExecutionGen) {
-                submittedClientOrderIds.remove(clientOrderId)
-                appendLog("Automation state changed to OFF immediately before submission. Aborting order.")
-                return
-            }
-
             // ORDER LIFECYCLE: Transition to SUBMITTING and persist durable state record BEFORE calling network
             val orderRecord = KalshiOrderRecord(
                 clientOrderId = clientOrderId,
-                ticker = activeMarket.ticker,
+                ticker = targetMarket.ticker,
                 side = targetSide,
                 action = "buy",
                 requestedCount = orderCount,
@@ -473,7 +268,7 @@ class KalshiAutomationEngine(
             )
 
             appendLog(
-                "Submitting $targetSide ($displaySide) order on ${activeMarket.ticker} for $orderCount contract(s) @ ${executablePriceCents}¢ " +
+                "Submitting $targetSide ($displaySide) order on ${targetMarket.ticker} for $orderCount contract(s) @ ${executablePriceCents}¢ " +
                 "(QtY 30s: ${prediction.decision} -> ${prediction.predictedPrice}, 90s: ${prediction.projectedDecision90s} -> ${prediction.projectedPrice90s})"
             )
 
@@ -559,7 +354,7 @@ class KalshiAutomationEngine(
                 }
 
                 // Associate trade details with prediction record for data integrity
-                prediction.kalshiContractTicker = activeMarket.ticker
+                prediction.kalshiContractTicker = targetMarket.ticker
                 prediction.kalshiOrderId = response.orderId
                 prediction.kalshiOrderStatus = response.status
                 prediction.kalshiFilledCount = response.filledCount
@@ -567,7 +362,7 @@ class KalshiAutomationEngine(
 
                 // SUCCESSFUL SUBMISSION STATE (Requirement 8):
                 // ONLY mark contract as traded AFTER Kalshi confirms successful order submission
-                tradedContracts[activeMarket.ticker] = timestamp
+                tradedContracts[targetMarket.ticker] = timestamp
 
                 _state.value = _state.value.copy(
                     recentOrders = updatedOrders,
@@ -603,9 +398,235 @@ class KalshiAutomationEngine(
 
             // Post-order reconciliation
             reconcileWithExchange()
+        } catch (t: Throwable) {
+            SafeLog.e(TAG, "Unexpected execution exception (failing closed): ${t.message}")
+            appendLog("Unexpected execution exception: ${t.message}. Failing closed — no order submitted.")
+            _state.value = _state.value.copy(
+                error = "Execution error: ${t.message}",
+                lastLifecycleState = OrderLifecycleState.FAILED
+            )
         } finally {
             executionMutex.unlock()
         }
+    }
+
+    /**
+     * FINAL FAIL-CLOSED EXECUTION GATE (Correction Pass 4/4 Mandate 3).
+     *
+     * Serves as the single, authoritative, consolidated LAST gate before order submission.
+     * Evaluates all gate requirements in strict order:
+     * 1. Automation != ON -> reject
+     * 2. Contract invalid -> reject
+     * 3. Order book invalid/stale/missing -> reject
+     * 4. Executable price unavailable -> reject
+     * 5. Model probability does not establish required edge -> reject
+     * 6. Risk check fails -> reject
+     * 7. Capital check fails -> reject
+     * 8. Exposure limit fails -> reject
+     * 9. Contract is already executed -> reject
+     * 10. Duplicate client order exists -> reject
+     * 11. Execution generation is stale -> reject
+     * 12. Any required state cannot be verified -> reject
+     * Otherwise -> submit
+     */
+    suspend fun evaluateFinalExecutionGate(
+        prediction: PredictionRecord,
+        currentBtcPrice: Double,
+        timestamp: Long,
+        currentExecutionGen: Long,
+        clientOrderId: String
+    ): ExecutionGateDecision {
+        val currentState = _state.value
+
+        // 1. if automation != ON: reject
+        if (!currentState.isAutomationEnabled) {
+            return ExecutionGateDecision.Reject("Automation is not ON")
+        }
+
+        // 2. if contract invalid: reject
+        val activeMarket = currentState.activeContract
+            ?: return ExecutionGateDecision.Reject("Contract missing: No active BTC 15m contract found on Kalshi")
+        val contractValidation = validateContract(activeMarket, currentBtcPrice, timestamp)
+        if (!contractValidation.isValid) {
+            return ExecutionGateDecision.Reject("Contract invalid: ${contractValidation.reason}")
+        }
+
+        // 3. if order book invalid/stale/missing: reject
+        val orderBook = currentState.latestOrderBook
+            ?: return ExecutionGateDecision.Reject("Order book is missing")
+        val verification = currentState.latestVerification ?: KalshiOrderBookVerifier.verify(
+            market = activeMarket,
+            orderBook = orderBook,
+            prediction = prediction,
+            nowMs = timestamp
+        )
+        if (verification.isStaleBook) {
+            return ExecutionGateDecision.Reject("Order book is stale (> 30s old)")
+        }
+        if (verification.isCrossedBook) {
+            return ExecutionGateDecision.Reject("Order book is crossed/inverted")
+        }
+        if (verification.marketBias == "UNAVAILABLE" || verification.marketBias == "NEUTRAL") {
+            return ExecutionGateDecision.Reject("Market bias is ${verification.marketBias}")
+        }
+        if (verification.verificationSummary in listOf("UNCONFIRMED", "DIVERGENCE", "NEUTRAL")) {
+            return ExecutionGateDecision.Reject("Order book verification rejected: ${verification.verificationSummary}")
+        }
+        val isVerifiedAgreement = (verification.verificationSummary == "FULL_AGREEMENT" ||
+            (verification.verificationSummary == "PARTIAL_AGREEMENT" && verification.agreement30s == "AGREEMENT"))
+        if (!isVerifiedAgreement) {
+            return ExecutionGateDecision.Reject("Order book verification summary '${verification.verificationSummary}' not approved")
+        }
+
+        val targetSide = if (prediction.decision == "UP") "bid" else "ask"
+        val displaySide = if (targetSide == "bid") "yes" else "no"
+
+        val bookValidation = validateOrderBookForExecution(
+            orderBook = orderBook,
+            targetContractTicker = activeMarket.ticker,
+            targetSide = targetSide,
+            requiredCount = 1,
+            nowMs = timestamp
+        )
+        if (!bookValidation.isValid) {
+            return ExecutionGateDecision.Reject("Order book execution validation failed: ${bookValidation.reason}")
+        }
+
+        // 4. if executable price unavailable: reject
+        val executablePriceCents = bookValidation.executablePriceCents
+        if (executablePriceCents !in 1..99) {
+            return ExecutionGateDecision.Reject("Executable price unavailable or invalid ($executablePriceCents¢)")
+        }
+
+        // 5. if model probability does not establish required edge: reject
+        val (modelProb, marketProb, calculatedEdge) = if (prediction.decision == "UP") {
+            val mProb = prediction.score
+            val mktProb = executablePriceCents / 100.0
+            Triple(mProb, mktProb, mProb - mktProb)
+        } else {
+            val mProb = 1.0 - prediction.score
+            val mktProb = (100 - executablePriceCents) / 100.0
+            Triple(mProb, mktProb, mProb - mktProb)
+        }
+        if (calculatedEdge < MIN_EXECUTABLE_EDGE) {
+            return ExecutionGateDecision.Reject(
+                "Model probability does not establish required edge: " +
+                "Edge=${String.format(java.util.Locale.US, "%.2f", calculatedEdge * 100)}% < Min ${(MIN_EXECUTABLE_EDGE * 100)}%"
+            )
+        }
+
+        // 6. if risk check fails: reject
+        val openPositionsExposure = currentState.activePositions.sumOf { it.marketExposureCents / 100.0 }
+        val restingOrdersExposure = currentState.recentOrders
+            .filter { it.status.equals("resting", ignoreCase = true) }
+            .sumOf { (it.count * it.price) / 100.0 }
+        val currentExposureDollars = openPositionsExposure + restingOrdersExposure
+
+        val volBps = (prediction.inputs.volatility / currentBtcPrice) * 10000.0
+        val riskEval = riskEngine.evaluateOrderSizing(
+            prediction = prediction,
+            contractPriceCents = executablePriceCents,
+            volatilityBps = volBps,
+            currentExposureDollars = currentExposureDollars
+        )
+        if (!riskEval.isApproved || riskEval.actualOrderSize <= 0) {
+            return ExecutionGateDecision.Reject("Risk check failed: ${riskEval.reason}")
+        }
+        val orderCount = minOf(riskEval.actualOrderSize, tradeSizeLimit.coerceIn(1, MAX_CONTRACTS_PER_ORDER))
+        if (bookValidation.availableDepth < orderCount) {
+            return ExecutionGateDecision.Reject("Insufficient book depth: depth=${bookValidation.availableDepth} < orderCount=$orderCount")
+        }
+
+        // 7. if capital check fails: reject
+        if (riskEval.eligibleCapitalDollars <= 0.0) {
+            return ExecutionGateDecision.Reject("Capital check failed: No eligible capital under profit-only capital rule")
+        }
+        val contractRiskCents = if (targetSide == "bid") {
+            orderCount * executablePriceCents.toLong()
+        } else {
+            orderCount * (100L - executablePriceCents)
+        }
+        val estimatedFeesCents = orderCount * 2L
+        val totalRequiredFundsCents = contractRiskCents + estimatedFeesCents
+        if (currentState.balance.balanceCents < totalRequiredFundsCents) {
+            return ExecutionGateDecision.Reject(
+                "Capital check failed: Insufficient balance ($${currentState.balance.balanceDollars} < required $${totalRequiredFundsCents / 100.0})"
+            )
+        }
+
+        // 8. if exposure limit fails: reject
+        val totalProjectedExposureDollars = currentExposureDollars + (contractRiskCents / 100.0)
+        if (totalProjectedExposureDollars > riskEngine.hardExposureLimitDollars) {
+            return ExecutionGateDecision.Reject("Exposure limit exceeded: projected $${totalProjectedExposureDollars} > max $${riskEngine.hardExposureLimitDollars}")
+        }
+
+        // 9. if contract is already executed: reject
+        val lastTraded = tradedContracts[activeMarket.ticker] ?: 0L
+        if (lastTraded > 0L && (timestamp - lastTraded) < ORDER_COOLDOWN_MS) {
+            return ExecutionGateDecision.Reject("Contract already executed: ${activeMarket.ticker} within cooldown")
+        }
+        val existingOrdersForContract = executionStore.getOrdersByContract(activeMarket.ticker)
+        val hasRecentOrActiveContractOrder = existingOrdersForContract.any {
+            (timestamp - it.placedTimestamp) < ORDER_COOLDOWN_MS ||
+            it.lifecycleState in listOf(
+                OrderLifecycleState.SUBMITTING,
+                OrderLifecycleState.SUBMITTED,
+                OrderLifecycleState.PARTIALLY_FILLED,
+                OrderLifecycleState.CANCEL_PENDING
+            )
+        }
+        if (hasRecentOrActiveContractOrder) {
+            return ExecutionGateDecision.Reject("Contract already executed: active or recent order in store for ${activeMarket.ticker}")
+        }
+        val hasResting = currentState.recentOrders.any {
+            it.ticker == activeMarket.ticker && it.status.equals("resting", ignoreCase = true)
+        }
+        if (hasResting) {
+            return ExecutionGateDecision.Reject("Contract already executed: active resting order exists on ${activeMarket.ticker}")
+        }
+
+        // 10. if duplicate client order exists: reject
+        if (submittedClientOrderIds.contains(clientOrderId) || executionStore.getOrderByClientOrderId(clientOrderId) != null) {
+            return ExecutionGateDecision.Reject("Duplicate client order exists: $clientOrderId")
+        }
+
+        // 11. if execution generation is stale: reject
+        if (executionGeneration.get() != currentExecutionGen) {
+            return ExecutionGateDecision.Reject("Execution generation is stale (${executionGeneration.get()} != $currentExecutionGen)")
+        }
+
+        // 12. if any required state cannot be verified: reject
+        if (!currentState.isAuthenticated || !apiClient.isAuthenticated()) {
+            return ExecutionGateDecision.Reject("Required state unverifiable: Kalshi API is not authenticated")
+        }
+        if (prediction.decision != "UP" && prediction.decision != "DOWN") {
+            return ExecutionGateDecision.Reject("Required state unverifiable: Prediction decision is ${prediction.decision}")
+        }
+        if (currentBtcPrice <= 0.0 || currentBtcPrice.isNaN()) {
+            return ExecutionGateDecision.Reject("Required state unverifiable: BTC price is invalid ($currentBtcPrice)")
+        }
+        val latestPrice = priceHistory.getLatest()
+        if (latestPrice != null && (timestamp - latestPrice.timestamp) > 15_000L) {
+            return ExecutionGateDecision.Reject("Required state unverifiable: Price data is stale (${timestamp - latestPrice.timestamp}ms > 15000ms)")
+        }
+        val currentPos = currentState.activePositions.find { it.ticker == activeMarket.ticker }?.position ?: 0
+        if (targetSide == "bid" && currentPos < 0) {
+            return ExecutionGateDecision.Reject("Required state unverifiable: Account holds opposite NO position ($currentPos)")
+        } else if (targetSide == "ask" && currentPos > 0) {
+            return ExecutionGateDecision.Reject("Required state unverifiable: Account holds opposite YES position ($currentPos)")
+        }
+
+        // Otherwise: submit
+        return ExecutionGateDecision.Submit(
+            market = activeMarket,
+            clientOrderId = clientOrderId,
+            targetSide = targetSide,
+            displaySide = displaySide,
+            orderCount = orderCount,
+            executablePriceCents = executablePriceCents,
+            riskEvaluation = riskEval,
+            calculatedEdge = calculatedEdge
+        )
     }
 
     /**

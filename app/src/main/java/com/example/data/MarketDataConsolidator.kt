@@ -107,7 +107,6 @@ class MarketDataConsolidator(
         val formulaTerms = mutableListOf<String>()
 
         for (pt in conformingPoints) {
-            provenance[pt.sourceKey] = pt
             provenance[pt.exchange] = pt
             val ageSec = max(0.0, (currentTimestamp - pt.timestamp) / 1000.0)
             val freshnessW = if (ageSec > (maxAgeMillis / 1000.0)) 0.0 else exp(-decayLambda * ageSec)

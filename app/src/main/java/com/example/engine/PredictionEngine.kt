@@ -124,7 +124,8 @@ class PredictionEngine(
         timestamp: Long = System.currentTimeMillis(),
         learningBias: Double = 0.0,
         factorOffsets: Map<String, Double> = emptyMap(),
-        settlementReference: Double = currentPrice
+        settlementReference: Double = currentPrice,
+        researchFeatures: com.example.engine.external.ExternalPredictionFeatures? = null
     ): PredictionRecord {
         val emaSignal = normalizeEmaSignal(currentPrice, snapshot.ema9, snapshot.ema21)
         val rsiSignal = normalizeRsiSignal(snapshot.rsi)
@@ -243,7 +244,8 @@ class PredictionEngine(
             maturityTimestamp = timestamp + (predictionHorizonSeconds * 1000L),
             calibratedScore = Math.round(calScore.coerceIn(0.0, 1.0) * 1000.0) / 1000.0,
             projectedPrice90s = Math.round(projectedPrice90s * 100.0) / 100.0,
-            projectedDecision90s = projectedDecision90s
+            projectedDecision90s = projectedDecision90s,
+            researchExternalFeatures = researchFeatures
         )
     }
 
