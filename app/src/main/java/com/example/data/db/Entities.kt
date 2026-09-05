@@ -75,7 +75,16 @@ data class PredictionEntity(
     val kalshiOrderStatus: String? = null,
     val kalshiFilledCount: Int? = null,
     val kalshiOrderPrice: Int? = null,
-    val executionPrice: Double? = null
+    val executionPrice: Double? = null,
+    // Extended Lineage & Audit fields
+    val sourceInstrument: String = "BTC-USD",
+    val localReceiptTimestamp: Long = 0L,
+    val marketDataUsed: String = "",
+    val eligibilityState: String = "ELIGIBLE",
+    val noTradeReason: String? = null,
+    val kalshiClientOrderId: String? = null,
+    val resolutionTimestamp: Long? = null,
+    val resolutionNotes: String? = null
 )
 
 @Entity(tableName = "backtest_records")
@@ -102,3 +111,54 @@ data class AdaptiveCalibrationEntity(
     val weightOffset: Double,
     val learningBias: Double
 )
+
+@Entity(
+    tableName = "kalshi_orders",
+    indices = [
+        androidx.room.Index(value = ["clientOrderId"], unique = true),
+        androidx.room.Index(value = ["orderId"]),
+        androidx.room.Index(value = ["ticker"]),
+        androidx.room.Index(value = ["lifecycleState"])
+    ]
+)
+data class KalshiOrderRecordEntity(
+    @PrimaryKey val clientOrderId: String,
+    val orderId: String? = null,
+    val ticker: String,
+    val side: String,
+    val action: String = "buy",
+    val requestedCount: Int,
+    val filledCount: Int = 0,
+    val remainingCount: Int = requestedCount,
+    val limitPriceCents: Int,
+    val averageFillPriceCents: Double? = null,
+    val feesCents: Double = 0.0,
+    val lifecycleState: String,
+    val placedTimestamp: Long,
+    val updatedTimestamp: Long,
+    val failureReason: String? = null
+)
+
+@Entity(
+    tableName = "realized_profit_ledger",
+    indices = [
+        androidx.room.Index(value = ["tradeId"], unique = true),
+        androidx.room.Index(value = ["contractTicker"]),
+        androidx.room.Index(value = ["timestamp"])
+    ]
+)
+data class RealizedProfitLedgerEntity(
+    @PrimaryKey val tradeId: String,
+    val contractTicker: String,
+    val orderId: String,
+    val clientOrderId: String,
+    val entryCostDollars: Double,
+    val settlementPriceDollars: Double,
+    val feesDollars: Double,
+    val realizedPnlDollars: Double,
+    val timestamp: Long,
+    val capitalSource: String,
+    val eligibleNextTradeCapitalDollars: Double,
+    val isWin: Boolean
+)
+

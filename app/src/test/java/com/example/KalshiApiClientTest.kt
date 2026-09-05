@@ -24,7 +24,7 @@ class KalshiApiClientTest {
 
         val signature = KalshiSigner.signMessage(timestamp, method, path, keyPair.private)
         assertNotNull(signature)
-        assertTrue(signature.isNotEmpty())
+        assertTrue(signature?.isNotEmpty() == true)
     }
 
     @Test

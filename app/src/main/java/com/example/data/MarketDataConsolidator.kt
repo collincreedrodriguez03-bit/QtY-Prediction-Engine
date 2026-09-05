@@ -98,13 +98,16 @@ class MarketDataConsolidator(
             else -> ExchangeAgreementStatus.DISAGREEMENT
         }
 
-        // 3. Compute weighted consolidation with exponential decay
+        // 3. Compute consolidated price
+        // If feeds diverge > 0.20% (DISAGREEMENT), compute the trimmed median of conforming feeds.
+        // Otherwise (STRONG or MODERATE agreement), compute freshness-weighted exponential consolidation.
         var sumWeightedPrice = 0.0
         var sumWeights = 0.0
         val provenance = mutableMapOf<String, PricePoint>()
         val formulaTerms = mutableListOf<String>()
 
         for (pt in conformingPoints) {
+            provenance[pt.sourceKey] = pt
             provenance[pt.exchange] = pt
             val ageSec = max(0.0, (currentTimestamp - pt.timestamp) / 1000.0)
             val freshnessW = if (ageSec > (maxAgeMillis / 1000.0)) 0.0 else exp(-decayLambda * ageSec)
@@ -112,17 +115,33 @@ class MarketDataConsolidator(
             sumWeightedPrice += pt.price * freshnessW
             sumWeights += freshnessW
 
-            formulaTerms.add("${pt.exchange}[${String.format(Locale.US, "%.1f", pt.price)} * ${String.format(Locale.US, "%.2f", freshnessW)}]")
+            formulaTerms.add("${pt.sourceKey}[${String.format(Locale.US, "%.1f", pt.price)} * ${String.format(Locale.US, "%.2f", freshnessW)}]")
         }
 
-        val consolidatedPrice = if (sumWeights > 0.0) {
-            sumWeightedPrice / sumWeights
-        } else {
-            meanPrice
-        }
-
+        val consolidatedPrice: Double
+        val formulaStr: String
         val quoteTag = conformingPoints.first().quoteCurrency
-        val formulaStr = "P_cons[$quoteTag] = ∑(w_i·P_i)/∑w_i = ${String.format(Locale.US, "%.2f", consolidatedPrice)} (div=${String.format(Locale.US, "%.3f", divergencePct)}%)"
+
+        if (agreementStatus == ExchangeAgreementStatus.DISAGREEMENT) {
+            // Trimmed median algorithm for divergent cross-exchange feeds
+            val sortedPrices = conformingPoints.map { it.price }.sorted()
+            consolidatedPrice = if (sortedPrices.size >= 4) {
+                // Trim lowest and highest outlier
+                val trimmed = sortedPrices.subList(1, sortedPrices.size - 1)
+                computeMedian(trimmed)
+            } else {
+                computeMedian(sortedPrices)
+            }
+            formulaStr = "P_cons[$quoteTag] = TrimmedMedian(${conformingPoints.size} feeds) = ${String.format(Locale.US, "%.2f", consolidatedPrice)} (div=${String.format(Locale.US, "%.3f", divergencePct)}% > 0.20% [DISAGREEMENT])"
+        } else {
+            // Freshness-weighted exponential decay consolidation
+            consolidatedPrice = if (sumWeights > 0.0) {
+                sumWeightedPrice / sumWeights
+            } else {
+                meanPrice
+            }
+            formulaStr = "P_cons[$quoteTag] = ∑(w_i·P_i)/∑w_i = ${String.format(Locale.US, "%.2f", consolidatedPrice)} (div=${String.format(Locale.US, "%.3f", divergencePct)}%)"
+        }
 
         return ConsolidatedMarketState(
             timestamp = currentTimestamp,
@@ -133,5 +152,15 @@ class MarketDataConsolidator(
             consolidationFormula = formulaStr,
             sourceProvenance = provenance
         )
+    }
+
+    private fun computeMedian(sortedList: List<Double>): Double {
+        if (sortedList.isEmpty()) return 0.0
+        val n = sortedList.size
+        return if (n % 2 == 1) {
+            sortedList[n / 2]
+        } else {
+            (sortedList[n / 2 - 1] + sortedList[n / 2]) / 2.0
+        }
     }
 }

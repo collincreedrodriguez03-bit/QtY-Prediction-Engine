@@ -19,15 +19,23 @@ class DatabaseMigrationTest {
 
         val dao = db.engineDao()
         assertNotNull(dao)
+        val kalshiDao = db.kalshiDao()
+        assertNotNull(kalshiDao)
     }
 
     @Test
     fun testMigrationObjectsNotNull() {
         assertNotNull(AppDatabase.MIGRATION_1_2)
         assertNotNull(AppDatabase.MIGRATION_2_3)
+        assertNotNull(AppDatabase.MIGRATION_3_4)
+        assertNotNull(AppDatabase.MIGRATION_4_5)
         assertTrue(AppDatabase.MIGRATION_1_2.startVersion == 1)
         assertTrue(AppDatabase.MIGRATION_1_2.endVersion == 2)
         assertTrue(AppDatabase.MIGRATION_2_3.startVersion == 2)
         assertTrue(AppDatabase.MIGRATION_2_3.endVersion == 3)
+        assertTrue(AppDatabase.MIGRATION_3_4.startVersion == 3)
+        assertTrue(AppDatabase.MIGRATION_3_4.endVersion == 4)
+        assertTrue(AppDatabase.MIGRATION_4_5.startVersion == 4)
+        assertTrue(AppDatabase.MIGRATION_4_5.endVersion == 5)
     }
 }

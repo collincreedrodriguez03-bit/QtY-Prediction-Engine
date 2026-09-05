@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Kalshi Automated Trading Execution Engine.
@@ -37,12 +38,28 @@ class KalshiAutomationEngine(
     val apiClient: KalshiApiClient = KalshiApiClient(),
     val priceHistory: PriceHistory,
     val tradeSizeLimit: Int = 1, // Strict small trade-size limit
-    val riskEngine: KalshiRiskEngine = KalshiRiskEngine()
+    val riskEngine: KalshiRiskEngine = KalshiRiskEngine(),
+    val executionStore: KalshiExecutionStore = InMemoryKalshiExecutionStore(),
+    val fillTimeoutMs: Long = 10_000L // Explicit fill timeout (10 seconds)
 ) {
     companion object {
         private const val TAG = "KalshiAutomationEngine"
         const val MAX_CONTRACTS_PER_ORDER = 5
         private const val ORDER_COOLDOWN_MS = 60_000L // Min 60s between orders on the same contract
+
+        /**
+         * Minimum required statistical edge to justify automated order placement:
+         * Edge = (model_probability - executable_market_probability).
+         *
+         * Documented Rationale:
+         * In fast 15-minute binary markets, a minimum edge threshold of 2.5% (0.025) is strictly required:
+         * 1. Exchange taker fees on Kalshi are approximately 1.5% to 2.0% of notional (~1-2¢ per contract).
+         * 2. Statistical calibration error margin accounts for empirical confidence limits.
+         * 3. Directional agreement alone is NOT sufficient — if market already prices YES at 80¢ and model
+         *    predicts UP with 75% probability, buying YES has negative expected value (-5% edge).
+         * If calculated edge < MIN_EXECUTABLE_EDGE, the engine fails closed with NO-TRADE.
+         */
+        const val MIN_EXECUTABLE_EDGE = 0.025 // 2.5% minimum required statistical edge
     }
 
     private val scope = CoroutineScope(Dispatchers.Default)
@@ -52,12 +69,43 @@ class KalshiAutomationEngine(
     private val _state = MutableStateFlow(KalshiAutomationState(isAutomationEnabled = false))
     val state: StateFlow<KalshiAutomationState> = _state.asStateFlow()
 
+    // Execution generation token to protect against already-running coroutines when toggled OFF
+    private val executionGeneration = AtomicLong(0L)
+
     // Mutex to strictly prevent concurrent execution / order submission races
     private val executionMutex = Mutex()
 
     // Deduplication tracking: contractTicker -> lastOrderTimestamp
     private val tradedContracts = ConcurrentHashMap<String, Long>()
     private val submittedClientOrderIds = ConcurrentHashMap.newKeySet<String>()
+
+    init {
+        scope.launch {
+            hydrateFromStore()
+        }
+    }
+
+    /**
+     * Hydrates risk and order state from durable store upon startup.
+     */
+    suspend fun hydrateFromStore() {
+        try {
+            riskEngine.hydrateFromLedger()
+            val clientIds = executionStore.getAllClientOrderIds()
+            submittedClientOrderIds.addAll(clientIds)
+            val activeOrders = executionStore.getActiveOrders()
+            for (order in activeOrders) {
+                tradedContracts[order.ticker] = order.placedTimestamp
+            }
+            _state.value = _state.value.copy(activeOrderRecords = activeOrders)
+        } catch (e: Exception) {
+            SafeLog.e(TAG, "Failed to hydrate from execution store: ${e.message}")
+        }
+    }
+
+    fun invalidateExecutionGeneration() {
+        executionGeneration.incrementAndGet()
+    }
 
     fun startSyncLoop() {
         if (syncJob?.isActive == true) return
@@ -84,6 +132,7 @@ class KalshiAutomationEngine(
      */
     fun toggleAutomation(enabled: Boolean) {
         if (!enabled) {
+            invalidateExecutionGeneration()
             _state.value = _state.value.copy(
                 isAutomationEnabled = false,
                 contractValidationMessage = "Automation OFF (fail-safe active)",
@@ -98,6 +147,7 @@ class KalshiAutomationEngine(
             )
             SafeLog.i(TAG, "Automation turned ON. Commencing contract & credential validation.")
             scope.launch {
+                hydrateFromStore()
                 syncMarketAndAccount()
             }
         }
@@ -114,6 +164,7 @@ class KalshiAutomationEngine(
         timestamp: Long
     ) {
         val currentState = _state.value
+        val currentExecutionGen = executionGeneration.get()
 
         // ORDER-BOOK VERIFICATION (Always runs for independent confirmation & telemetry)
         val activeMarket = currentState.activeContract
@@ -139,6 +190,12 @@ class KalshiAutomationEngine(
         }
 
         try {
+            // Automation OFF check inside mutex
+            if (!_state.value.isAutomationEnabled || executionGeneration.get() != currentExecutionGen) {
+                appendLog("Automation turned OFF. Aborting execution.")
+                return
+            }
+
             // Trade Validation Audit
             appendLog("Trade Validation: Order Book Verification Status = ${verification.verificationSummary} (30s: ${verification.agreement30s}, 90s: ${verification.agreement90s})")
 
@@ -224,6 +281,22 @@ class KalshiAutomationEngine(
                 return
             }
 
+            // Durable duplicate check against execution store
+            val existingOrdersForContract = executionStore.getOrdersByContract(activeMarket.ticker)
+            val recentContractOrder = existingOrdersForContract.any {
+                (timestamp - it.placedTimestamp) < ORDER_COOLDOWN_MS ||
+                it.lifecycleState in listOf(
+                    OrderLifecycleState.SUBMITTING,
+                    OrderLifecycleState.SUBMITTED,
+                    OrderLifecycleState.PARTIALLY_FILLED,
+                    OrderLifecycleState.CANCEL_PENDING
+                )
+            }
+            if (recentContractOrder) {
+                appendLog("Duplicate order prevention: Contract ${activeMarket.ticker} has recent or active order in store. Skipping.")
+                return
+            }
+
             // Prevent duplicate orders if an active resting order exists
             val hasResting = currentState.recentOrders.any {
                 it.ticker == activeMarket.ticker && it.status.equals("resting", ignoreCase = true)
@@ -234,29 +307,84 @@ class KalshiAutomationEngine(
             }
 
             // Determine side based on QtY Prediction:
-            // UP -> buy "yes" contract
-            // DOWN -> buy "no" contract
-            val orderSide = if (prediction.decision == "UP") "yes" else "no"
+            // UP -> buy "yes" contract via side = "bid"
+            // DOWN -> economically buy "no" (sell "yes") via side = "ask"
+            val targetSide = if (prediction.decision == "UP") "bid" else "ask"
+            val displaySide = if (targetSide == "bid") "yes" else "no"
 
             // Prevent position mismatch / conflicting opposing trade
             val currentPos = currentState.activePositions.find { it.ticker == activeMarket.ticker }?.position ?: 0
-            if (orderSide == "yes" && currentPos < 0) {
+            if (targetSide == "bid" && currentPos < 0) {
                 appendLog("Position mismatch: Account holds opposite NO position ($currentPos) on ${activeMarket.ticker}. Failing closed.")
                 return
-            } else if (orderSide == "no" && currentPos > 0) {
+            } else if (targetSide == "ask" && currentPos > 0) {
                 appendLog("Position mismatch: Account holds opposite YES position ($currentPos) on ${activeMarket.ticker}. Failing closed.")
                 return
             }
 
-            val limitPrice = if (orderSide == "yes") {
-                if (activeMarket.yesAsk in 1..99) activeMarket.yesAsk else 50
-            } else {
-                if (activeMarket.noAsk in 1..99) activeMarket.noAsk else 50
+            // ORDER-BOOK HARD EXECUTION GATE (Requirements 4, 5, 6)
+            // Verify timestamp freshness, bid/ask validity, non-crossed, executable side, depth, and non-fabricated price
+            val bookValidation = validateOrderBookForExecution(
+                orderBook = orderBook,
+                targetContractTicker = activeMarket.ticker,
+                targetSide = targetSide,
+                requiredCount = 1,
+                nowMs = timestamp
+            )
+            if (!bookValidation.isValid) {
+                appendLog("Execution blocked by Order-Book Gate: ${bookValidation.reason}. Failing closed.")
+                return
             }
+            val executablePriceCents = bookValidation.executablePriceCents
+            if (executablePriceCents !in 1..99) {
+                appendLog("Execution blocked: Executable price $executablePriceCents¢ is invalid. Failing closed.")
+                return
+            }
+
+            // EXECUTABLE PRICE EDGE (Requirement 7)
+            // Calculate whether QtY's predicted probability provides a genuine statistical edge versus the actual executable Kalshi price.
+            // Edge = model_probability - executable_market_probability
+            val (modelProb, marketProb, calculatedEdge) = if (prediction.decision == "UP") {
+                val mProb = prediction.score
+                val mktProb = executablePriceCents / 100.0
+                Triple(mProb, mktProb, mProb - mktProb)
+            } else {
+                val mProb = 1.0 - prediction.score
+                // For selling YES / buying NO, market probability of DOWN is (100 - executablePriceCents) / 100.0
+                val mktProb = (100 - executablePriceCents) / 100.0
+                Triple(mProb, mktProb, mProb - mktProb)
+            }
+
+            appendLog(
+                "Executable Edge Check: Model P=${String.format(java.util.Locale.US, "%.1f", modelProb * 100)}% vs " +
+                "Market P=${String.format(java.util.Locale.US, "%.1f", marketProb * 100)}% -> " +
+                "Edge=${String.format(java.util.Locale.US, "%+.2f", calculatedEdge * 100)}% (Min: ${(MIN_EXECUTABLE_EDGE * 100)}%)"
+            )
+
+            if (calculatedEdge < MIN_EXECUTABLE_EDGE) {
+                appendLog(
+                    "Execution blocked: Calculated edge (${String.format(java.util.Locale.US, "%.2f", calculatedEdge * 100)}%) " +
+                    "is below minimum required threshold (${(MIN_EXECUTABLE_EDGE * 100)}%). Directional agreement alone does not " +
+                    "constitute a trading edge. Defaulting to NO-TRADE."
+                )
+                return
+            }
+
+            // HARD EXPOSURE & LOSS CHECK (Requirements 6 & 7)
+            val openPositionsExposure = currentState.activePositions.sumOf { it.marketExposureCents / 100.0 }
+            val restingOrdersExposure = currentState.recentOrders
+                .filter { it.status.equals("resting", ignoreCase = true) }
+                .sumOf { (it.count * it.price) / 100.0 }
+            val currentExposureDollars = openPositionsExposure + restingOrdersExposure
 
             // P0 Mandate 4 & 5: Risk-Based Position Sizing & Profit-Only Capital Rule
             val volBps = (prediction.inputs.volatility / currentBtcPrice) * 10000.0
-            val riskEval = riskEngine.evaluateOrderSizing(prediction, limitPrice, volBps)
+            val riskEval = riskEngine.evaluateOrderSizing(
+                prediction = prediction,
+                contractPriceCents = executablePriceCents,
+                volatilityBps = volBps,
+                currentExposureDollars = currentExposureDollars
+            )
             appendLog(
                 "Risk & Capital Audit: Trade #${riskEngine.getTradeCount() + 1} | " +
                 "Eligible Realized-Profit Capital: $${String.format(java.util.Locale.US, "%.2f", riskEval.eligibleCapitalDollars)} | " +
@@ -272,62 +400,161 @@ class KalshiAutomationEngine(
             // MANDATE 8: Small trade-size enforcement bounded by hard limit and risk engine
             val orderCount = minOf(riskEval.actualOrderSize, tradeSizeLimit.coerceIn(1, MAX_CONTRACTS_PER_ORDER))
 
-            // Balance check: Ensure sufficient cash balance (max exposure = orderCount * 100 cents)
-            val maxCostCents = orderCount * 100L
-            if (currentState.balance.balanceCents < maxCostCents) {
-                appendLog("Insufficient balance (${currentState.balance.balanceDollars} USD < required ${maxCostCents / 100.0} USD). Failing closed.")
+            // Check depth can actually support the sized order count
+            if (bookValidation.availableDepth < orderCount) {
+                appendLog("Execution blocked: Available book depth (${bookValidation.availableDepth}) is less than sized order count ($orderCount). Failing closed.")
+                return
+            }
+
+            // BALANCE/COST CHECK (Requirement 11)
+            // Calculate expected required funds from actual executable price, quantity, and applicable fees.
+            val contractRiskCents = if (targetSide == "bid") {
+                orderCount * executablePriceCents.toLong()
+            } else {
+                orderCount * (100L - executablePriceCents)
+            }
+            val estimatedFeesCents = orderCount * 2L // ~2¢ per contract Kalshi taker fee
+            val totalRequiredFundsCents = contractRiskCents + estimatedFeesCents
+
+            if (currentState.balance.balanceCents < totalRequiredFundsCents) {
+                appendLog(
+                    "Insufficient balance: Available $${currentState.balance.balanceDollars} USD < required " +
+                    "$${String.format(java.util.Locale.US, "%.2f", totalRequiredFundsCents / 100.0)} USD (Contracts: " +
+                    "$${String.format(java.util.Locale.US, "%.2f", contractRiskCents / 100.0)} + Fees: " +
+                    "$${String.format(java.util.Locale.US, "%.2f", estimatedFeesCents / 100.0)}). Failing closed."
+                )
                 _state.value = _state.value.copy(error = "Insufficient Kalshi balance")
                 return
             }
 
             val clientOrderId = "qty_${activeMarket.ticker}_${timestamp}_${UUID.randomUUID().toString().take(6)}"
-            if (!submittedClientOrderIds.add(clientOrderId)) {
-                appendLog("Duplicate clientOrderId detected. Failing closed.")
+            if (!submittedClientOrderIds.add(clientOrderId) || executionStore.getOrderByClientOrderId(clientOrderId) != null) {
+                appendLog("Duplicate clientOrderId detected ($clientOrderId). Failing closed.")
                 return
             }
 
+            // V2 EVENT ORDER REQUEST (Requirement 3)
             val orderRequest = KalshiOrderRequest(
                 ticker = activeMarket.ticker,
-                action = "buy",
-                side = orderSide,
-                type = "limit",
+                clientOrderId = clientOrderId,
+                side = targetSide,
                 count = orderCount,
-                yesPrice = if (orderSide == "yes") limitPrice else null,
-                noPrice = if (orderSide == "no") limitPrice else null,
-                clientOrderId = clientOrderId
+                price = String.format(java.util.Locale.US, "%.4f", executablePriceCents / 100.0),
+                priceCents = executablePriceCents,
+                timeInForce = "good_till_canceled",
+                selfTradePreventionType = "taker_at_cross"
+            )
+
+            // AUTOMATION OFF SAFETY: Verify state immediately before submission (Requirement 9)
+            if (!_state.value.isAutomationEnabled || executionGeneration.get() != currentExecutionGen) {
+                submittedClientOrderIds.remove(clientOrderId)
+                appendLog("Automation state changed to OFF immediately before submission. Aborting order.")
+                return
+            }
+
+            // ORDER LIFECYCLE: Transition to SUBMITTING and persist durable state record BEFORE calling network
+            val orderRecord = KalshiOrderRecord(
+                clientOrderId = clientOrderId,
+                ticker = activeMarket.ticker,
+                side = targetSide,
+                action = "buy",
+                requestedCount = orderCount,
+                filledCount = 0,
+                remainingCount = orderCount,
+                limitPriceCents = executablePriceCents,
+                lifecycleState = OrderLifecycleState.SUBMITTING,
+                placedTimestamp = timestamp,
+                updatedTimestamp = timestamp
+            )
+            executionStore.recordOrder(orderRecord)
+            _state.value = _state.value.copy(
+                lastLifecycleState = OrderLifecycleState.SUBMITTING,
+                activeOrderRecords = executionStore.getActiveOrders()
             )
 
             appendLog(
-                "Submitting $orderSide order on ${activeMarket.ticker} for $orderCount contract(s) @ ${limitPrice}¢ " +
+                "Submitting $targetSide ($displaySide) order on ${activeMarket.ticker} for $orderCount contract(s) @ ${executablePriceCents}¢ " +
                 "(QtY 30s: ${prediction.decision} -> ${prediction.predictedPrice}, 90s: ${prediction.projectedDecision90s} -> ${prediction.projectedPrice90s})"
             )
 
-            // Mark as traded to prevent duplicate submissions
-            tradedContracts[activeMarket.ticker] = timestamp
-
-            // Submit order via official Kalshi API client
+            // Submit order via official Kalshi API client (DO NOT mark traded before confirmation - Requirement 8)
             val result = apiClient.submitOrder(orderRequest)
+            var postSubmitRecord: KalshiOrderRecord? = null
+
             result.onSuccess { response ->
                 // Execution State Safety: Validate order response state
                 val validStatuses = setOf("resting", "filled", "executed", "canceled", "rejected", "pending")
                 if (!validStatuses.contains(response.status.lowercase())) {
+                    val failedRec = orderRecord.copy(
+                        lifecycleState = OrderLifecycleState.FAILED,
+                        failureReason = "Unknown order state: ${response.status}",
+                        updatedTimestamp = System.currentTimeMillis()
+                    )
+                    executionStore.updateOrder(failedRec)
                     appendLog("Unknown order state '${response.status}' received from Kalshi API. Failing closed.")
-                    _state.value = _state.value.copy(error = "Unknown order state: ${response.status}")
+                    _state.value = _state.value.copy(
+                        error = "Unknown order state: ${response.status}",
+                        lastLifecycleState = OrderLifecycleState.FAILED,
+                        activeOrderRecords = executionStore.getActiveOrders()
+                    )
                     return@onSuccess
                 }
 
                 // Execution State Safety: Validate fill count bounds
                 if (response.filledCount < 0 || response.filledCount > response.count) {
+                    val failedRec = orderRecord.copy(
+                        lifecycleState = OrderLifecycleState.FAILED,
+                        failureReason = "Unknown fill count: ${response.filledCount} out of ${response.count}",
+                        updatedTimestamp = System.currentTimeMillis()
+                    )
+                    executionStore.updateOrder(failedRec)
                     appendLog("Unknown fill count: ${response.filledCount} out of ${response.count}. Failing closed.")
-                    _state.value = _state.value.copy(error = "Unknown fill count: ${response.filledCount}")
+                    _state.value = _state.value.copy(
+                        error = "Unknown fill count: ${response.filledCount}",
+                        lastLifecycleState = OrderLifecycleState.FAILED,
+                        activeOrderRecords = executionStore.getActiveOrders()
+                    )
                     return@onSuccess
                 }
 
+                if (response.status.equals("rejected", ignoreCase = true)) {
+                    val failedRec = orderRecord.copy(
+                        lifecycleState = OrderLifecycleState.FAILED,
+                        failureReason = "Order rejected by Kalshi API",
+                        updatedTimestamp = System.currentTimeMillis()
+                    )
+                    executionStore.updateOrder(failedRec)
+                    appendLog("Order rejected by Kalshi API. Failing closed.")
+                    _state.value = _state.value.copy(
+                        error = "Order rejected by exchange",
+                        lastLifecycleState = OrderLifecycleState.FAILED,
+                        activeOrderRecords = executionStore.getActiveOrders()
+                    )
+                    return@onSuccess
+                }
+
+                val initialLifecycle = when {
+                    response.filledCount >= response.count -> OrderLifecycleState.FILLED
+                    response.filledCount > 0 -> OrderLifecycleState.PARTIALLY_FILLED
+                    else -> OrderLifecycleState.SUBMITTED
+                }
+
+                val updatedRecord = orderRecord.copy(
+                    orderId = response.orderId,
+                    filledCount = response.filledCount,
+                    remainingCount = response.remainingCount,
+                    averageFillPriceCents = response.averageFillPrice?.let { it * 100.0 },
+                    feesCents = response.feesCents,
+                    lifecycleState = initialLifecycle,
+                    updatedTimestamp = System.currentTimeMillis()
+                )
+                executionStore.updateOrder(updatedRecord)
+                postSubmitRecord = updatedRecord
+
                 val updatedOrders = (listOf(response) + currentState.recentOrders).take(20)
-                val fillStatus = when {
-                    response.status.equals("rejected", ignoreCase = true) -> "REJECTED"
-                    response.filledCount >= response.count -> "FILLED (${response.filledCount}/${response.count})"
-                    response.filledCount > 0 -> "PARTIAL_FILL (${response.filledCount}/${response.count})"
+                val fillStatus = when (initialLifecycle) {
+                    OrderLifecycleState.FILLED -> "FILLED (${response.filledCount}/${response.count})"
+                    OrderLifecycleState.PARTIALLY_FILLED -> "PARTIAL_FILL (${response.filledCount}/${response.count})"
                     else -> "RESTING (0/${response.count})"
                 }
 
@@ -338,42 +565,288 @@ class KalshiAutomationEngine(
                 prediction.kalshiFilledCount = response.filledCount
                 prediction.kalshiOrderPrice = response.price
 
+                // SUCCESSFUL SUBMISSION STATE (Requirement 8):
+                // ONLY mark contract as traded AFTER Kalshi confirms successful order submission
+                tradedContracts[activeMarket.ticker] = timestamp
+
                 _state.value = _state.value.copy(
                     recentOrders = updatedOrders,
                     lastOrderSubmittedAt = timestamp,
                     lastOrderStatus = "${response.side.uppercase()} ${response.count}x @ ${response.price}¢ [$fillStatus]",
+                    lastLifecycleState = initialLifecycle,
+                    activeOrderRecords = executionStore.getActiveOrders(),
                     error = null
                 )
                 appendLog("Order result: ID=${response.orderId}, Status=$fillStatus")
-
-                // Refresh portfolio positions and balance immediately
-                syncMarketAndAccount()
             }.onFailure { err ->
+                val failedRec = orderRecord.copy(
+                    lifecycleState = OrderLifecycleState.FAILED,
+                    failureReason = err.message,
+                    updatedTimestamp = System.currentTimeMillis()
+                )
+                executionStore.updateOrder(failedRec)
                 _state.value = _state.value.copy(
                     lastOrderStatus = "FAILED: ${err.message}",
+                    lastLifecycleState = OrderLifecycleState.FAILED,
+                    activeOrderRecords = executionStore.getActiveOrders(),
                     error = err.message
                 )
-                appendLog("Order submission error: ${err.message}. Failing closed.")
+                appendLog("Order submission error: ${err.message}. Failed requests do not consume trade slot. Failing closed.")
             }
+
+            // Fill Verification and Fill Timeout Handling
+            postSubmitRecord?.let { rec ->
+                if (rec.lifecycleState == OrderLifecycleState.SUBMITTED || rec.lifecycleState == OrderLifecycleState.PARTIALLY_FILLED) {
+                    handleFillTimeoutAndVerification(rec, currentExecutionGen)
+                }
+            }
+
+            // Post-order reconciliation
+            reconcileWithExchange()
         } finally {
             executionMutex.unlock()
         }
     }
 
     /**
+     * Requirement 3 & 4: Fill Verification and Fill Timeout.
+     * Evaluates resting orders against the exchange. If resting beyond fillTimeoutMs, executes cancellation.
+     * Persists order lifecycle state at each transition.
+     */
+    suspend fun handleFillTimeoutAndVerification(
+        orderRecord: KalshiOrderRecord,
+        currentGen: Long
+    ): KalshiOrderRecord {
+        val orderId = orderRecord.orderId ?: return orderRecord
+        if (orderRecord.lifecycleState == OrderLifecycleState.FILLED ||
+            orderRecord.lifecycleState == OrderLifecycleState.FAILED ||
+            orderRecord.lifecycleState == OrderLifecycleState.CANCELLED) {
+            return orderRecord
+        }
+
+        // Check if automation was turned off or generation invalidated
+        if (!_state.value.isAutomationEnabled || executionGeneration.get() != currentGen) {
+            return orderRecord
+        }
+
+        // Fill verification via API
+        val checkRes = apiClient.getOrder(orderId)
+        if (checkRes.isSuccess) {
+            val detail = checkRes.getOrThrow()
+            if (detail.filledCount >= detail.count) {
+                val filledRecord = orderRecord.copy(
+                    lifecycleState = OrderLifecycleState.FILLED,
+                    filledCount = detail.filledCount,
+                    remainingCount = 0,
+                    averageFillPriceCents = detail.averageFillPrice?.let { it * 100.0 },
+                    feesCents = detail.feesCents,
+                    updatedTimestamp = System.currentTimeMillis()
+                )
+                executionStore.updateOrder(filledRecord)
+                _state.value = _state.value.copy(
+                    lastLifecycleState = OrderLifecycleState.FILLED,
+                    activeOrderRecords = executionStore.getActiveOrders()
+                )
+                return filledRecord
+            } else if (detail.filledCount > 0 && detail.filledCount < detail.count) {
+                val partialRecord = orderRecord.copy(
+                    lifecycleState = OrderLifecycleState.PARTIALLY_FILLED,
+                    filledCount = detail.filledCount,
+                    remainingCount = detail.remainingCount,
+                    averageFillPriceCents = detail.averageFillPrice?.let { it * 100.0 },
+                    feesCents = detail.feesCents,
+                    updatedTimestamp = System.currentTimeMillis()
+                )
+                executionStore.updateOrder(partialRecord)
+                _state.value = _state.value.copy(
+                    lastLifecycleState = OrderLifecycleState.PARTIALLY_FILLED,
+                    activeOrderRecords = executionStore.getActiveOrders()
+                )
+            }
+        }
+
+        // Check fill timeout window
+        val elapsed = System.currentTimeMillis() - orderRecord.placedTimestamp
+        if (elapsed >= fillTimeoutMs) {
+            appendLog("Fill timeout (${fillTimeoutMs}ms) elapsed for order $orderId. Attempting cancellation.")
+            val cancelPendingRecord = orderRecord.copy(
+                lifecycleState = OrderLifecycleState.CANCEL_PENDING,
+                updatedTimestamp = System.currentTimeMillis()
+            )
+            executionStore.updateOrder(cancelPendingRecord)
+            _state.value = _state.value.copy(
+                lastLifecycleState = OrderLifecycleState.CANCEL_PENDING,
+                activeOrderRecords = executionStore.getActiveOrders()
+            )
+
+            // Attempt cancellation
+            val cancelRes = apiClient.cancelOrder(orderId)
+            val postCancelDetail = apiClient.getOrder(orderId).getOrNull()
+            val finalFilled = postCancelDetail?.filledCount ?: orderRecord.filledCount
+            val finalRemaining = postCancelDetail?.remainingCount ?: (orderRecord.requestedCount - finalFilled)
+
+            val finalState = when {
+                finalFilled >= orderRecord.requestedCount -> OrderLifecycleState.FILLED
+                finalFilled > 0 -> OrderLifecycleState.PARTIALLY_FILLED
+                cancelRes.isSuccess -> OrderLifecycleState.CANCELLED
+                else -> OrderLifecycleState.FAILED
+            }
+
+            val finalRecord = orderRecord.copy(
+                lifecycleState = finalState,
+                filledCount = finalFilled,
+                remainingCount = finalRemaining,
+                failureReason = if (cancelRes.isFailure) "Cancel failed: ${cancelRes.exceptionOrNull()?.message}" else null,
+                updatedTimestamp = System.currentTimeMillis()
+            )
+            executionStore.updateOrder(finalRecord)
+            _state.value = _state.value.copy(
+                lastLifecycleState = finalState,
+                activeOrderRecords = executionStore.getActiveOrders()
+            )
+            appendLog("Order $orderId finalized as $finalState (filled: $finalFilled, remaining: $finalRemaining)")
+            return finalRecord
+        }
+
+        return orderRecord
+    }
+
+    /**
+     * Requirement 5: Post-Order Reconciliation.
+     * Synchronizes local state with exchange open orders and positions.
+     * Prevents false assumptions and detects discrepancies.
+     * If reconciliation fails: FAIL CLOSED.
+     */
+    suspend fun reconcileWithExchange(): Result<Boolean> {
+        if (!apiClient.isAuthenticated()) {
+            return Result.success(true)
+        }
+
+        try {
+            val openOrdersRes = apiClient.getOpenOrders()
+            val positionsRes = apiClient.getPositions()
+            val balanceRes = apiClient.getPortfolioBalance()
+
+            if (openOrdersRes.isFailure || positionsRes.isFailure || balanceRes.isFailure) {
+                val err = openOrdersRes.exceptionOrNull()?.message
+                    ?: positionsRes.exceptionOrNull()?.message
+                    ?: balanceRes.exceptionOrNull()?.message
+                    ?: "Unknown error fetching exchange state"
+                appendLog("Post-order reconciliation failed: $err. Failing closed.")
+                _state.value = _state.value.copy(
+                    isAutomationEnabled = false,
+                    isReconciliationFailed = true,
+                    error = "Reconciliation failure: $err"
+                )
+                invalidateExecutionGeneration()
+                return Result.failure(Exception("Reconciliation failure: $err"))
+            }
+
+            val exchangeOrders = openOrdersRes.getOrNull().orEmpty()
+            val exchangePositions = positionsRes.getOrNull().orEmpty()
+            val exchangeBalance = balanceRes.getOrNull() ?: KalshiBalance()
+
+            // Verify local active orders against exchange
+            val localActiveOrders = executionStore.getActiveOrders()
+            for (localOrder in localActiveOrders) {
+                val orderId = localOrder.orderId
+                if (orderId != null) {
+                    val matchingExchangeOrder = exchangeOrders.find { it.orderId == orderId }
+                    if (matchingExchangeOrder == null) {
+                        // Order is not resting in exchange open orders. Query its terminal state.
+                        val orderStatusRes = apiClient.getOrder(orderId)
+                        if (orderStatusRes.isSuccess) {
+                            val exchangeDetail = orderStatusRes.getOrThrow()
+                            val updatedRecord = when (exchangeDetail.status.lowercase()) {
+                                "executed", "filled" -> localOrder.copy(
+                                    lifecycleState = OrderLifecycleState.FILLED,
+                                    filledCount = exchangeDetail.filledCount,
+                                    remainingCount = 0,
+                                    averageFillPriceCents = exchangeDetail.averageFillPrice?.let { it * 100.0 },
+                                    feesCents = exchangeDetail.feesCents,
+                                    updatedTimestamp = System.currentTimeMillis()
+                                )
+                                "canceled" -> localOrder.copy(
+                                    lifecycleState = OrderLifecycleState.CANCELLED,
+                                    filledCount = exchangeDetail.filledCount,
+                                    remainingCount = exchangeDetail.remainingCount,
+                                    updatedTimestamp = System.currentTimeMillis()
+                                )
+                                else -> localOrder.copy(
+                                    filledCount = exchangeDetail.filledCount,
+                                    remainingCount = exchangeDetail.remainingCount,
+                                    updatedTimestamp = System.currentTimeMillis()
+                                )
+                            }
+                            executionStore.updateOrder(updatedRecord)
+                        } else {
+                            // If order query fails or exchange denies knowledge of order: FAIL CLOSED
+                            appendLog("Reconciliation mismatch: Local active order $orderId not recognized by exchange. Failing closed.")
+                            _state.value = _state.value.copy(
+                                isAutomationEnabled = false,
+                                isReconciliationFailed = true,
+                                error = "Reconciliation mismatch on order $orderId"
+                            )
+                            invalidateExecutionGeneration()
+                            return Result.failure(Exception("Reconciliation mismatch on order $orderId"))
+                        }
+                    } else {
+                        // Order is still resting on exchange
+                        if (matchingExchangeOrder.filledCount != localOrder.filledCount) {
+                            val updated = localOrder.copy(
+                                filledCount = matchingExchangeOrder.filledCount,
+                                remainingCount = matchingExchangeOrder.remainingCount,
+                                lifecycleState = if (matchingExchangeOrder.filledCount > 0) OrderLifecycleState.PARTIALLY_FILLED else OrderLifecycleState.SUBMITTED,
+                                updatedTimestamp = System.currentTimeMillis()
+                            )
+                            executionStore.updateOrder(updated)
+                        }
+                    }
+                }
+            }
+
+            _state.value = _state.value.copy(
+                balance = exchangeBalance,
+                activePositions = exchangePositions,
+                recentOrders = exchangeOrders,
+                activeOrderRecords = executionStore.getActiveOrders(),
+                isReconciliationFailed = false
+            )
+            return Result.success(true)
+        } catch (e: Exception) {
+            appendLog("Reconciliation exception: ${e.message}. Failing closed.")
+            _state.value = _state.value.copy(
+                isAutomationEnabled = false,
+                isReconciliationFailed = true,
+                error = "Reconciliation exception: ${e.message}"
+            )
+            invalidateExecutionGeneration()
+            return Result.failure(e)
+        }
+    }
+
+    /**
      * Validates that the active Kalshi contract is:
-     * 1. Belongs to the verified 15-minute series (KXBTC15M).
+     * 1. Belongs to the verified 15-minute series (KXBTC15M) or event.
      * 2. Closes strictly within the current 15-minute window (> 30s remaining to avoid settlement lock).
-     * 3. Has an active trading status.
+     * 3. Has an active/open trading status.
      * 4. Aligns with QtY's rolling 15-minute reference methodology.
+     * 5. Strike price is valid and not excessively divergent from spot.
      */
     fun validateContract(
         market: KalshiMarket,
         currentBtcPrice: Double,
         nowMs: Long
     ): ValidationResult {
-        if (market.seriesTicker != KalshiApiClient.BTC_15M_SERIES && !market.ticker.startsWith("KXBTC15M")) {
-            return ValidationResult(false, "Unrecognized series ticker: ${market.seriesTicker}")
+        if (market.ticker.isBlank()) {
+            return ValidationResult(false, "Contract ticker is empty")
+        }
+
+        val isBtc15mSeries = market.seriesTicker.equals(KalshiApiClient.BTC_15M_SERIES, ignoreCase = true) ||
+            market.eventTicker.contains("KXBTC15M", ignoreCase = true) ||
+            market.ticker.contains("KXBTC15M", ignoreCase = true)
+        if (!isBtc15mSeries) {
+            return ValidationResult(false, "Unrecognized series/event ticker: ${market.seriesTicker} / ${market.eventTicker}")
         }
 
         if (!market.status.equals("active", ignoreCase = true) && !market.status.equals("open", ignoreCase = true)) {
@@ -390,7 +863,7 @@ class KalshiAutomationEngine(
 
         val remainingMs = market.closeTimeMs - nowMs
         if (remainingMs <= 30_000L) {
-            return ValidationResult(false, "Contract expiring too soon (${remainingMs / 1000}s remaining)")
+            return ValidationResult(false, "Contract expiring too soon (${remainingMs / 1000}s remaining <= 30s buffer)")
         }
 
         // Settlement window validation: contract duration must be a 15m window (~10m to ~20m)
@@ -414,6 +887,84 @@ class KalshiAutomationEngine(
 
         return ValidationResult(true, "Contract verified: ${market.ticker}, closes in ${remainingMs / 1000}s")
     }
+
+    /**
+     * Hard Order-Book Execution Gate (Requirements 4, 5, 6):
+     * Strictly verifies order book freshness, bid/ask validity, non-crossed state,
+     * required side presence, and depth before allowing any order to be placed.
+     */
+    fun validateOrderBookForExecution(
+        orderBook: KalshiOrderBookSnapshot?,
+        targetContractTicker: String,
+        targetSide: String, // "bid" or "ask"
+        requiredCount: Int,
+        nowMs: Long
+    ): OrderBookExecutionValidation {
+        if (orderBook == null) {
+            return OrderBookExecutionValidation(false, reason = "Order book is missing")
+        }
+        if (orderBook.ticker != targetContractTicker) {
+            return OrderBookExecutionValidation(
+                false,
+                reason = "Order book ticker '${orderBook.ticker}' does not match target '$targetContractTicker'"
+            )
+        }
+        if (orderBook.timestampMs <= 0L) {
+            return OrderBookExecutionValidation(false, reason = "Order book missing valid timestamp")
+        }
+        val ageMs = nowMs - orderBook.timestampMs
+        if (ageMs > 15_000L || ageMs < -5_000L) {
+            return OrderBookExecutionValidation(false, reason = "Order book is stale (${ageMs}ms old > 15000ms)")
+        }
+        val bestYesBid = orderBook.bestYesBidCents
+        val impliedYesAsk = orderBook.impliedYesAskCents
+        if (bestYesBid == null || impliedYesAsk == null || bestYesBid !in 1..99 || impliedYesAsk !in 1..99) {
+            return OrderBookExecutionValidation(
+                false,
+                reason = "Order book is one-sided or missing valid two-sided quotes (bestYesBid=$bestYesBid, impliedYesAsk=$impliedYesAsk)"
+            )
+        }
+        if (bestYesBid >= impliedYesAsk) {
+            return OrderBookExecutionValidation(
+                false,
+                reason = "Order book is crossed/inverted (bestYesBid=$bestYesBid >= impliedYesAsk=$impliedYesAsk)"
+            )
+        }
+        if (targetSide == "bid") {
+            val executablePrice = impliedYesAsk
+            if (executablePrice !in 1..99) {
+                return OrderBookExecutionValidation(false, reason = "Executable YES ask price ($executablePrice) is out of 1..99 range")
+            }
+            val availableDepth = orderBook.noBids.firstOrNull()?.quantity ?: orderBook.totalNoDepth
+            if (availableDepth <= 0.0) {
+                return OrderBookExecutionValidation(false, reason = "Missing executable depth on ask side (depth=$availableDepth)")
+            }
+            if (availableDepth < requiredCount) {
+                return OrderBookExecutionValidation(false, reason = "Available ask depth ($availableDepth) is less than requested count ($requiredCount)")
+            }
+            return OrderBookExecutionValidation(true, executablePriceCents = executablePrice, availableDepth = availableDepth)
+        } else {
+            val executablePrice = bestYesBid
+            if (executablePrice !in 1..99) {
+                return OrderBookExecutionValidation(false, reason = "Executable YES bid price ($executablePrice) is out of 1..99 range")
+            }
+            val availableDepth = orderBook.yesBids.firstOrNull()?.quantity ?: orderBook.totalYesDepth
+            if (availableDepth <= 0.0) {
+                return OrderBookExecutionValidation(false, reason = "Missing executable depth on bid side (depth=$availableDepth)")
+            }
+            if (availableDepth < requiredCount) {
+                return OrderBookExecutionValidation(false, reason = "Available bid depth ($availableDepth) is less than requested count ($requiredCount)")
+            }
+            return OrderBookExecutionValidation(true, executablePriceCents = executablePrice, availableDepth = availableDepth)
+        }
+    }
+
+    data class OrderBookExecutionValidation(
+        val isValid: Boolean,
+        val executablePriceCents: Int = 0,
+        val availableDepth: Double = 0.0,
+        val reason: String = ""
+    )
 
     /**
      * Synchronizes active markets, balance, and open positions with Kalshi.
@@ -464,28 +1015,14 @@ class KalshiAutomationEngine(
             }
         }
 
-        var balance = _state.value.balance
-        var positions = _state.value.activePositions
-
         if (auth) {
-            apiClient.getPortfolioBalance().onSuccess { bal ->
-                balance = bal
-            }.onFailure { err ->
-                SafeLog.w(TAG, "Failed to update balance: ${err.message}")
-            }
-            apiClient.getPositions().onSuccess { posList ->
-                positions = posList
-            }.onFailure { err ->
-                SafeLog.w(TAG, "Failed to update positions: ${err.message}")
-            }
+            reconcileWithExchange()
         }
 
         _state.value = _state.value.copy(
             isAuthenticated = auth,
             activeContract = activeMarket,
             contractValidationMessage = if (_state.value.isAutomationEnabled) validationMsg else "Automation OFF",
-            balance = balance,
-            activePositions = positions,
             latestOrderBook = orderBook
         )
     }

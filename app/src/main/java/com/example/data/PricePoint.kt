@@ -13,8 +13,13 @@ data class PricePoint(
     val quoteCurrency: String = "USD",
     val baseVolumeBtc: Double = volume,
     val quoteVolumeUsd: Double = 0.0,
-    val exchangeTimestamp: Long = timestamp
-)
+    val exchangeTimestamp: Long = timestamp,
+    val instrument: String = if (quoteCurrency.equals("USDT", ignoreCase = true)) "BTC-USDT" else "BTC-USD",
+    val isRestSnapshot: Boolean = false,
+    val localReceiptTimestamp: Long = timestamp
+) {
+    val sourceKey: String get() = "${exchange}:${instrument}"
+}
 
 /**
  * Result of cross-exchange comparison.

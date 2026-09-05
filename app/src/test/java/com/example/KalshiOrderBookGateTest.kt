@@ -300,6 +300,7 @@ class KalshiOrderBookGateTest {
 
         // Agreement verified -> order submitted successfully
         assertEquals("Order MUST be submitted when verification passes with AGREEMENT", 1, mockClient.submittedOrders.size)
-        assertEquals("yes", mockClient.submittedOrders[0].side)
+        assertEquals("bid", mockClient.submittedOrders[0].side)
+        assertEquals("yes", mockClient.submittedOrders[0].orderSide)
     }
 }

@@ -34,10 +34,18 @@ object KalshiSigner {
         }
     }
 
-    fun signMessage(timestamp: Long, method: String, path: String, privateKey: PrivateKey): String {
+    fun signMessage(timestamp: Long, method: String, path: String, privateKey: PrivateKey): String? {
         // Strip any query parameters from path for the signature string
         val pathWithoutQuery = if (path.contains("?")) path.substringBefore("?") else path
-        val message = "$timestamp$method$pathWithoutQuery"
+
+        // The signed path MUST include the complete API path: /trade-api/v2/...
+        val fullPath = when {
+            pathWithoutQuery.startsWith("/trade-api/v2/") -> pathWithoutQuery
+            pathWithoutQuery == "/trade-api/v2" -> pathWithoutQuery
+            pathWithoutQuery.startsWith("/") -> "/trade-api/v2$pathWithoutQuery"
+            else -> "/trade-api/v2/$pathWithoutQuery"
+        }
+        val message = "$timestamp$method$fullPath"
 
         return try {
             val pssSpec = PSSParameterSpec(
@@ -47,17 +55,19 @@ object KalshiSigner {
                 32,
                 1
             )
-            val signature = Signature.getInstance("SHA256withRSA/PSS")
+            val signature = try {
+                Signature.getInstance("RSASSA-PSS")
+            } catch (_: Throwable) {
+                Signature.getInstance("SHA256withRSA/PSS")
+            }
             signature.setParameter(pssSpec)
             signature.initSign(privateKey)
             signature.update(message.toByteArray(Charsets.UTF_8))
             encodeBase64(signature.sign())
         } catch (_: Throwable) {
-            // Fallback to SHA256withRSA if PSS is unavailable
-            val signature = Signature.getInstance("SHA256withRSA")
-            signature.initSign(privateKey)
-            signature.update(message.toByteArray(Charsets.UTF_8))
-            encodeBase64(signature.sign())
+            // STRICT REQUIREMENT: REMOVE any fallback to SHA256withRSA.
+            // If RSA-PSS cannot be performed correctly, fail closed.
+            null
         }
     }
 

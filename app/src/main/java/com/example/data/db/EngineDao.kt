@@ -47,7 +47,10 @@ interface EngineDao {
             kalshiOrderStatus = COALESCE(:kalshiOrderStatus, kalshiOrderStatus),
             kalshiFilledCount = COALESCE(:kalshiFilledCount, kalshiFilledCount),
             kalshiOrderPrice = COALESCE(:kalshiOrderPrice, kalshiOrderPrice),
-            executionPrice = COALESCE(:executionPrice, executionPrice)
+            executionPrice = COALESCE(:executionPrice, executionPrice),
+            kalshiClientOrderId = COALESCE(:kalshiClientOrderId, kalshiClientOrderId),
+            resolutionTimestamp = COALESCE(:resolutionTimestamp, resolutionTimestamp),
+            resolutionNotes = COALESCE(:resolutionNotes, resolutionNotes)
         WHERE predictionId = :predictionId
     """)
     suspend fun updatePredictionResolution(
@@ -64,7 +67,10 @@ interface EngineDao {
         kalshiOrderStatus: String? = null,
         kalshiFilledCount: Int? = null,
         kalshiOrderPrice: Int? = null,
-        executionPrice: Double? = null
+        executionPrice: Double? = null,
+        kalshiClientOrderId: String? = null,
+        resolutionTimestamp: Long? = null,
+        resolutionNotes: String? = null
     )
 
     @Query("SELECT * FROM predictions ORDER BY timestamp DESC LIMIT :limit")

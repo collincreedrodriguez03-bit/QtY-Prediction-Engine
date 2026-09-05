@@ -22,7 +22,16 @@ data class IndicatorSnapshot(
 )
 
 /**
- * Immutable Prediction Record model holding full context and lineage.
+ * Prediction Record model holding full context and lineage across its lifecycle.
+ *
+ * Lifecycle Architecture:
+ * - Time T (Immutable Context): Prediction inputs, indicator snapshot, model score,
+ *   decision, eligibility state, market timestamps, and source instruments are established
+ *   at prediction time and MUST NOT be altered.
+ * - Time T + Δt (Execution & Resolution Phase): Execution tracking fields (Kalshi order,
+ *   fill count, execution price) and maturity evaluation fields (actualPrice30s, actualPrice90s,
+ *   result30s, result90s) are updated as events occur and MUST be immediately persisted to
+ *   durable storage via [EngineRepository].
  */
 data class PredictionRecord(
     val predictionId: String = UUID.randomUUID().toString(),
@@ -39,7 +48,7 @@ data class PredictionRecord(
     val maturityTimestamp: Long = timestamp + (predictionHorizon * 1000L),
     val calibratedScore: Double? = null,
     var actualPrice: Double? = null,
-    var result: String? = null, // "CORRECT" | "INCORRECT" | "PENDING"
+    var result: String? = null, // "CORRECT" | "INCORRECT" | "TIE" | "UNRESOLVED" | "PENDING"
     val projectedPrice90s: Double = predictedPrice,
     val projectedDecision90s: String = decision,
     // Dedicated 30-second and 90-second resolution evaluation fields
@@ -51,6 +60,12 @@ data class PredictionRecord(
     // Source / exchange provenance and market timestamp
     val sourceExchange: String = "CONSOLIDATED_USD",
     val marketTimestamp: Long = timestamp,
+    // Lineage & Audit Fields (Pass 3 Requirement)
+    val sourceInstrument: String = "BTC-USD",
+    val localReceiptTimestamp: Long = timestamp,
+    val marketDataUsed: String = "",
+    val eligibilityState: String = "ELIGIBLE",
+    val noTradeReason: String? = null,
     // Kalshi order and execution lineage fields
     var kalshiContractTicker: String? = null,
     var strikePrice: Double? = null,
@@ -58,7 +73,10 @@ data class PredictionRecord(
     var kalshiOrderStatus: String? = null,
     var kalshiFilledCount: Int? = null,
     var kalshiOrderPrice: Int? = null,
-    var executionPrice: Double? = null
+    var executionPrice: Double? = null,
+    var kalshiClientOrderId: String? = null,
+    var resolutionTimestamp: Long? = null,
+    var resolutionNotes: String? = null
 ) {
     val raw_model_score: Double get() = score
 }

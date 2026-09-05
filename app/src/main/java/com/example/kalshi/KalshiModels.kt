@@ -23,19 +23,68 @@ data class KalshiMarket(
 )
 
 /**
- * Order submission request to Kalshi V2 /portfolio/orders
+ * Current V2 Event Order submission request to Kalshi:
+ * POST /portfolio/events/orders
+ *
+ * For event markets:
+ * side = "bid" (buy YES)
+ * side = "ask" (sell YES)
  */
 data class KalshiOrderRequest(
     val ticker: String,
-    val action: String, // "buy" | "sell"
-    val side: String, // "yes" | "no"
-    val type: String = "limit", // "limit"
-    val count: Int,
-    val yesPrice: Int? = null,
-    val noPrice: Int? = null,
     val clientOrderId: String,
-    val timeInForce: String = "good_till_canceled"
-)
+    val side: String, // "bid" = buy YES | "ask" = sell YES
+    val count: Int,
+    val price: String, // fixed-point dollar string e.g. "0.6500"
+    val priceCents: Int = 0, // integer cents 1..99
+    val timeInForce: String = "good_till_canceled",
+    val selfTradePreventionType: String = "taker_at_cross",
+    // Compatibility properties for internal models & older tests
+    val action: String = if (side == "bid" || side.equals("yes", ignoreCase = true)) "buy" else "sell",
+    val type: String = "limit",
+    val orderSide: String = if (side == "bid" || side.equals("yes", ignoreCase = true)) "yes" else "no",
+    val yesPrice: Int? = if (side == "bid" || side.equals("yes", ignoreCase = true)) priceCents.takeIf { it > 0 } else null,
+    val noPrice: Int? = if (side == "ask" || side.equals("no", ignoreCase = true)) (100 - priceCents).takeIf { it in 1..99 } else null
+) {
+    // Secondary constructor to seamlessly support legacy test invocation patterns
+    constructor(
+        ticker: String,
+        action: String = "buy",
+        side: String,
+        type: String = "limit",
+        count: Int,
+        yesPrice: Int? = null,
+        noPrice: Int? = null,
+        clientOrderId: String,
+        timeInForce: String = "good_till_canceled",
+        selfTradePreventionType: String = "taker_at_cross"
+    ) : this(
+        ticker = ticker,
+        clientOrderId = clientOrderId,
+        side = when (side.lowercase()) {
+            "yes", "bid" -> "bid"
+            "no", "ask" -> "ask"
+            else -> side
+        },
+        count = count,
+        priceCents = when {
+            yesPrice != null -> yesPrice
+            noPrice != null -> (100 - noPrice).coerceIn(1, 99)
+            else -> 0
+        },
+        price = String.format(
+            java.util.Locale.US,
+            "%.4f",
+            (when {
+                yesPrice != null -> yesPrice
+                noPrice != null -> (100 - noPrice).coerceIn(1, 99)
+                else -> 0
+            }) / 100.0
+        ),
+        timeInForce = timeInForce,
+        selfTradePreventionType = selfTradePreventionType
+    )
+}
 
 /**
  * Order response from Kalshi
@@ -50,7 +99,65 @@ data class KalshiOrderResponse(
     val count: Int,
     val filledCount: Int,
     val price: Int,
-    val placeTimeMs: Long
+    val placeTimeMs: Long,
+    val remainingCount: Int = count - filledCount,
+    val averageFillPrice: Double? = null,
+    val feesCents: Double = 0.0
+)
+
+/**
+ * Explicit execution state machine for order lifecycle:
+ * ELIGIBLE -> VALIDATING -> SUBMITTING -> SUBMITTED -> PARTIALLY_FILLED -> FILLED -> CANCEL_PENDING -> CANCELLED -> FAILED
+ */
+enum class OrderLifecycleState {
+    ELIGIBLE,
+    VALIDATING,
+    SUBMITTING,
+    SUBMITTED,
+    PARTIALLY_FILLED,
+    FILLED,
+    CANCEL_PENDING,
+    CANCELLED,
+    FAILED
+}
+
+/**
+ * Durable order execution record tracking all required lifecycle and fill verification fields.
+ */
+data class KalshiOrderRecord(
+    val clientOrderId: String,
+    val orderId: String? = null,
+    val ticker: String,
+    val side: String, // "bid" or "ask"
+    val action: String = "buy",
+    val requestedCount: Int,
+    val filledCount: Int = 0,
+    val remainingCount: Int = requestedCount,
+    val limitPriceCents: Int,
+    val averageFillPriceCents: Double? = null,
+    val feesCents: Double = 0.0,
+    val lifecycleState: OrderLifecycleState = OrderLifecycleState.ELIGIBLE,
+    val placedTimestamp: Long = System.currentTimeMillis(),
+    val updatedTimestamp: Long = System.currentTimeMillis(),
+    val failureReason: String? = null
+)
+
+/**
+ * Realized profit and loss ledger entry for durable capital tracking.
+ */
+data class RealizedProfitLedgerEntry(
+    val tradeId: String,
+    val contractTicker: String,
+    val orderId: String,
+    val clientOrderId: String,
+    val entryCostDollars: Double,
+    val settlementPriceDollars: Double,
+    val feesDollars: Double,
+    val realizedPnlDollars: Double,
+    val timestamp: Long,
+    val capitalSource: String, // "STARTING_CAPITAL" or "REALIZED_PROFIT"
+    val eligibleNextTradeCapitalDollars: Double,
+    val isWin: Boolean
 )
 
 /**
@@ -141,5 +248,8 @@ data class KalshiAutomationState(
     val lastOrderSubmittedAt: Long = 0L,
     val lastOrderStatus: String? = null,
     val error: String? = null,
-    val executionLog: List<String> = emptyList()
+    val executionLog: List<String> = emptyList(),
+    val activeOrderRecords: List<KalshiOrderRecord> = emptyList(),
+    val lastLifecycleState: OrderLifecycleState? = null,
+    val isReconciliationFailed: Boolean = false
 )

@@ -75,7 +75,7 @@ class BtcDataFeed(
     val binanceTickCount: AtomicLong get() = binanceMarketTicks
     val coinbaseTickCount: AtomicLong get() = coinbaseMarketTicks
     val krakenTickCount: AtomicLong get() = krakenMarketTicks
-    val bitstampTickCount: AtomicLong get() = bitstampRestFetches
+    val bitstampTickCount: AtomicLong get() = bitstampMarketTicks
 
     // Hysteresis tracking: require 3 consecutive successful WS messages before leaving REST fallback
     private val consecutiveWsSuccess = ConcurrentHashMap<String, Int>()
@@ -222,8 +222,12 @@ class BtcDataFeed(
                                 quoteCurrency = "USDT",
                                 baseVolumeBtc = bidQty + askQty,
                                 quoteVolumeUsd = (bidQty + askQty) * mid,
-                                exchangeTimestamp = now
+                                exchangeTimestamp = now,
+                                instrument = "BTC-USDT",
+                                isRestSnapshot = false,
+                                localReceiptTimestamp = now
                             )
+                            latestSpotPoints[pt.sourceKey] = pt
                             latestSpotPoints["BINANCE"] = pt
                             updateStatus("BINANCE", FeedState.STREAMING, mid, "Bid: $bid | Ask: $ask", null, count)
                         }
@@ -274,8 +278,12 @@ class BtcDataFeed(
                                 quoteCurrency = "USDT",
                                 baseVolumeBtc = bidQty + askQty,
                                 quoteVolumeUsd = (bidQty + askQty) * mid,
-                                exchangeTimestamp = now
+                                exchangeTimestamp = now,
+                                instrument = "BTC-USDT",
+                                isRestSnapshot = true,
+                                localReceiptTimestamp = now
                             )
+                            latestSpotPoints[pt.sourceKey] = pt
                             latestSpotPoints["BINANCE"] = pt
                             updateStatus("BINANCE", FeedState.POLLING, mid, "REST Fallback", null, binanceMarketTicks.get())
                             return@withContext pt
@@ -324,6 +332,12 @@ class BtcDataFeed(
                                 consecutiveWsSuccess["COINBASE"] = succ
                                 if (succ >= 3) isRestFallbackActive["COINBASE"] = false
 
+                                val timeStr = json.optString("time")
+                                val exTimestamp = try {
+                                    if (timeStr.isNotEmpty()) java.time.Instant.parse(timeStr).toEpochMilli() else now
+                                } catch (e: Exception) {
+                                    now
+                                }
                                 val pt = PricePoint(
                                     price = price,
                                     timestamp = now,
@@ -334,8 +348,12 @@ class BtcDataFeed(
                                     quoteCurrency = "USD",
                                     baseVolumeBtc = vol,
                                     quoteVolumeUsd = vol * price,
-                                    exchangeTimestamp = now
+                                    exchangeTimestamp = exTimestamp,
+                                    instrument = "BTC-USD",
+                                    isRestSnapshot = false,
+                                    localReceiptTimestamp = now
                                 )
+                                latestSpotPoints[pt.sourceKey] = pt
                                 latestSpotPoints["COINBASE"] = pt
                                 updateStatus("COINBASE", FeedState.STREAMING, price, "Spot WS", null, count)
                             }
@@ -383,8 +401,12 @@ class BtcDataFeed(
                                 quoteCurrency = "USD",
                                 baseVolumeBtc = 1.0,
                                 quoteVolumeUsd = amount,
-                                exchangeTimestamp = now
+                                exchangeTimestamp = now,
+                                instrument = "BTC-USD",
+                                isRestSnapshot = true,
+                                localReceiptTimestamp = now
                             )
+                            latestSpotPoints[pt.sourceKey] = pt
                             latestSpotPoints["COINBASE"] = pt
                             updateStatus("COINBASE", FeedState.POLLING, amount, "REST Spot", null, coinbaseMarketTicks.get())
                             return@withContext pt
@@ -454,8 +476,12 @@ class BtcDataFeed(
                                             quoteCurrency = "USD",
                                             baseVolumeBtc = vol,
                                             quoteVolumeUsd = vol * price,
-                                            exchangeTimestamp = now
+                                            exchangeTimestamp = now,
+                                            instrument = "XBT/USD",
+                                            isRestSnapshot = false,
+                                            localReceiptTimestamp = now
                                         )
+                                        latestSpotPoints[pt.sourceKey] = pt
                                         latestSpotPoints["KRAKEN"] = pt
                                         updateStatus("KRAKEN", FeedState.STREAMING, price, "XBT Spot WS", null, count)
                                     }
@@ -518,8 +544,12 @@ class BtcDataFeed(
                                     quoteCurrency = "USD",
                                     baseVolumeBtc = vol,
                                     quoteVolumeUsd = vol * price,
-                                    exchangeTimestamp = now
+                                    exchangeTimestamp = now,
+                                    instrument = "XBT/USD",
+                                    isRestSnapshot = true,
+                                    localReceiptTimestamp = now
                                 )
+                                latestSpotPoints[pt.sourceKey] = pt
                                 latestSpotPoints["KRAKEN"] = pt
                                 updateStatus("KRAKEN", FeedState.POLLING, price, "REST Ticker", null, krakenMarketTicks.get())
                                 return@withContext pt
@@ -552,6 +582,9 @@ class BtcDataFeed(
                         val bid = json.optString("bid").toDoubleOrNull() ?: price
                         val vol = json.optString("volume").toDoubleOrNull() ?: 1.0
 
+                        val tsStr = json.optString("timestamp")
+                        val exTimestamp = (tsStr.toLongOrNull()?.times(1000L)) ?: now
+
                         if (price > 0.0) {
                             val count = bitstampRestFetches.incrementAndGet()
                             val pt = PricePoint(
@@ -564,8 +597,12 @@ class BtcDataFeed(
                                 quoteCurrency = "USD",
                                 baseVolumeBtc = vol,
                                 quoteVolumeUsd = vol * price,
-                                exchangeTimestamp = now
+                                exchangeTimestamp = exTimestamp,
+                                instrument = "BTC-USD",
+                                isRestSnapshot = true,
+                                localReceiptTimestamp = now
                             )
+                            latestSpotPoints[pt.sourceKey] = pt
                             latestSpotPoints["BITSTAMP"] = pt
                             updateStatus("BITSTAMP", FeedState.POLLING, price, "REST Spot", null, count)
                             return@withContext pt

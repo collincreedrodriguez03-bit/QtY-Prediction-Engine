@@ -30,7 +30,7 @@ open class KalshiApiClient(
         .readTimeout(4000, TimeUnit.MILLISECONDS)
         .writeTimeout(4000, TimeUnit.MILLISECONDS)
         .build(),
-    private val baseUrl: String = "https://api.elections.kalshi.com/trade-api/v2"
+    private val baseUrl: String = "https://external-api.kalshi.com/trade-api/v2"
 ) {
     companion object {
         private const val TAG = "KalshiApiClient"
@@ -314,6 +314,7 @@ open class KalshiApiClient(
             val endpoint = "/portfolio/balance"
             val timestamp = System.currentTimeMillis()
             val signature = KalshiSigner.signMessage(timestamp, "GET", endpoint, pk)
+                ?: return@withContext Result.failure(Exception("RSA-PSS signing failed. Fail closed."))
 
             val request = Request.Builder()
                 .url("$baseUrl$endpoint")
@@ -366,6 +367,7 @@ open class KalshiApiClient(
             val endpoint = "/portfolio/positions"
             val timestamp = System.currentTimeMillis()
             val signature = KalshiSigner.signMessage(timestamp, "GET", endpoint, pk)
+                ?: return@withContext Result.failure(Exception("RSA-PSS signing failed. Fail closed."))
 
             val request = Request.Builder()
                 .url("$baseUrl$endpoint")
@@ -420,43 +422,53 @@ open class KalshiApiClient(
     }
 
     /**
-     * Submits a new order to Kalshi V2 /portfolio/orders.
-     * Enforces clientOrderId to prevent duplicate submissions.
+     * Submits a new event order to Kalshi V2 /portfolio/events/orders.
+     * Enforces client_order_id to prevent duplicate submissions.
+     * For event markets: bid = buy YES, ask = sell YES.
      */
     open suspend fun submitOrder(order: KalshiOrderRequest): Result<KalshiOrderResponse> = withContext(Dispatchers.IO) {
         val kid = keyId
         val pk = privateKey
         if (kid == null || pk == null) {
-            return@withContext Result.failure(Exception("Account not authenticated with Kalshi credentials"))
+            return@withContext Result.failure(Exception("Account not authenticated with Kalshi credentials. Fail closed."))
         }
 
         // Validate order inputs before submitting
         if (order.count <= 0 || order.count > 5) {
             return@withContext Result.failure(Exception("Invalid order count (${order.count}): must be between 1 and 5"))
         }
-        if (order.side != "yes" && order.side != "no") {
-            return@withContext Result.failure(Exception("Invalid side (${order.side}): must be 'yes' or 'no'"))
-        }
-        val targetPrice = if (order.side == "yes") order.yesPrice else order.noPrice
-        if (targetPrice != null && (targetPrice <= 0 || targetPrice >= 100)) {
-            return@withContext Result.failure(Exception("Invalid limit price ($targetPrice cents): must be 1..99"))
+
+        // Event orders use side = "bid" (buy YES) or "ask" (sell YES)
+        val targetSide = when (order.side.lowercase()) {
+            "bid", "yes" -> "bid"
+            "ask", "no" -> "ask"
+            else -> return@withContext Result.failure(Exception("Invalid side (${order.side}): must be 'bid' (buy YES) or 'ask' (sell YES)"))
         }
 
+        // Resolve executable price strictly in 1..99 cents - strictly fail closed without default/fabricated price
+        val resolvedPriceCents = when {
+            order.priceCents in 1..99 -> order.priceCents
+            order.yesPrice != null && order.yesPrice in 1..99 -> order.yesPrice
+            order.noPrice != null && order.noPrice in 1..99 -> 100 - order.noPrice
+            else -> order.price.toDoubleOrNull()?.let { (it * 100.0).roundToInt() }?.takeIf { it in 1..99 }
+        } ?: return@withContext Result.failure(Exception("Invalid or missing executable price: price must be in 1..99 cents. Fail closed."))
+
+        val formattedPrice = String.format(java.util.Locale.US, "%.4f", resolvedPriceCents / 100.0)
+
         try {
-            val endpoint = "/portfolio/orders"
+            val endpoint = "/portfolio/events/orders"
             val timestamp = System.currentTimeMillis()
             val signature = KalshiSigner.signMessage(timestamp, "POST", endpoint, pk)
+                ?: return@withContext Result.failure(Exception("RSA-PSS signing failed. Fail closed."))
 
             val jsonBody = JSONObject().apply {
                 put("ticker", order.ticker)
-                put("action", order.action)
-                put("side", order.side)
-                put("type", order.type)
-                put("count", order.count)
                 put("client_order_id", order.clientOrderId)
+                put("side", targetSide)
+                put("count", order.count)
+                put("price", formattedPrice)
                 put("time_in_force", order.timeInForce)
-                if (order.yesPrice != null) put("yes_price", order.yesPrice)
-                if (order.noPrice != null) put("no_price", order.noPrice)
+                put("self_trade_prevention_type", order.selfTradePreventionType)
             }
 
             val requestBody = jsonBody.toString().toRequestBody("application/json".toMediaType())
@@ -484,10 +496,11 @@ open class KalshiApiClient(
 
             val jsonResp = JSONObject(responseBody)
             val orderObj = jsonResp.optJSONObject("order") ?: jsonResp
-            val orderId = orderObj.optString("order_id")
+            val orderId = orderObj.optString("order_id").ifEmpty { orderObj.optString("id") }
             val status = orderObj.optString("status", "resting")
             val filled = orderObj.optInt("filled_count", 0)
-            val price = if (order.side == "yes") (order.yesPrice ?: 50) else (order.noPrice ?: 50)
+            val respPrice = orderObj.optString("price").toDoubleOrNull()?.let { (it * 100.0).roundToInt() }
+                ?: orderObj.optInt("price", resolvedPriceCents)
 
             Result.success(
                 KalshiOrderResponse(
@@ -495,11 +508,11 @@ open class KalshiApiClient(
                     clientOrderId = order.clientOrderId,
                     ticker = order.ticker,
                     status = status,
-                    action = order.action,
-                    side = order.side,
+                    action = if (targetSide == "bid") "buy" else "sell",
+                    side = targetSide,
                     count = order.count,
                     filledCount = filled,
-                    price = price,
+                    price = respPrice,
                     placeTimeMs = timestamp
                 )
             )
@@ -513,7 +526,7 @@ open class KalshiApiClient(
      * Cancels an open or resting order on Kalshi V2:
      * DELETE /portfolio/orders/{order_id}
      */
-    suspend fun cancelOrder(orderId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+    open suspend fun cancelOrder(orderId: String): Result<Boolean> = withContext(Dispatchers.IO) {
         val kid = keyId
         val pk = privateKey
         if (kid == null || pk == null) {
@@ -528,6 +541,7 @@ open class KalshiApiClient(
             val endpoint = "/portfolio/orders/$orderId"
             val timestamp = System.currentTimeMillis()
             val signature = KalshiSigner.signMessage(timestamp, "DELETE", endpoint, pk)
+                ?: return@withContext Result.failure(Exception("RSA-PSS signing failed. Fail closed."))
 
             val request = Request.Builder()
                 .url("$baseUrl$endpoint")
@@ -553,7 +567,7 @@ open class KalshiApiClient(
      * Retrieves currently open/resting orders:
      * GET /portfolio/orders?status=resting
      */
-    suspend fun getOpenOrders(): Result<List<KalshiOrderResponse>> = withContext(Dispatchers.IO) {
+    open suspend fun getOpenOrders(): Result<List<KalshiOrderResponse>> = withContext(Dispatchers.IO) {
         val kid = keyId
         val pk = privateKey
         if (kid == null || pk == null) {
@@ -564,6 +578,7 @@ open class KalshiApiClient(
             val endpoint = "/portfolio/orders?status=resting"
             val timestamp = System.currentTimeMillis()
             val signature = KalshiSigner.signMessage(timestamp, "GET", endpoint, pk)
+                ?: return@withContext Result.failure(Exception("RSA-PSS signing failed. Fail closed."))
 
             val request = Request.Builder()
                 .url("$baseUrl$endpoint")
@@ -585,6 +600,14 @@ open class KalshiApiClient(
             val list = mutableListOf<KalshiOrderResponse>()
             for (i in 0 until ordersArr.length()) {
                 val o = ordersArr.getJSONObject(i)
+                val priceVal = o.optString("price").toDoubleOrNull()?.let { (it * 100.0).roundToInt() }
+                    ?: o.optInt("yes_price", o.optInt("no_price", 0))
+                val countVal = o.optInt("count", 1)
+                val filledVal = o.optInt("filled_count", 0)
+                val remainingVal = o.optInt("remaining_count", countVal - filledVal)
+                val avgFillPrice = if (o.has("avg_fill_price") && !o.isNull("avg_fill_price")) o.optDouble("avg_fill_price") else null
+                val feesPaid = o.optDouble("fees_paid", 0.0)
+
                 list.add(
                     KalshiOrderResponse(
                         orderId = o.optString("order_id"),
@@ -592,15 +615,86 @@ open class KalshiApiClient(
                         ticker = o.optString("ticker"),
                         status = o.optString("status", "resting"),
                         action = o.optString("action", "buy"),
-                        side = o.optString("side", "yes"),
-                        count = o.optInt("count", 1),
-                        filledCount = o.optInt("filled_count", 0),
-                        price = o.optInt("yes_price", o.optInt("no_price", 50)),
-                        placeTimeMs = parseIsoTimeToMs(o.optString("created_time"))
+                        side = o.optString("side", "bid"),
+                        count = countVal,
+                        filledCount = filledVal,
+                        price = priceVal,
+                        placeTimeMs = parseIsoTimeToMs(o.optString("created_time")),
+                        remainingCount = remainingVal,
+                        averageFillPrice = avgFillPrice,
+                        feesCents = feesPaid * 100.0
                     )
                 )
             }
             Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Retrieves specific order state from Kalshi V2:
+     * GET /portfolio/orders/{order_id}
+     */
+    open suspend fun getOrder(orderId: String): Result<KalshiOrderResponse> = withContext(Dispatchers.IO) {
+        val kid = keyId
+        val pk = privateKey
+        if (kid == null || pk == null) {
+            return@withContext Result.failure(Exception("Account not authenticated with Kalshi credentials. Fail closed."))
+        }
+
+        if (orderId.isBlank()) {
+            return@withContext Result.failure(Exception("Cannot fetch order: empty order ID"))
+        }
+
+        try {
+            val endpoint = "/portfolio/orders/$orderId"
+            val timestamp = System.currentTimeMillis()
+            val signature = KalshiSigner.signMessage(timestamp, "GET", endpoint, pk)
+                ?: return@withContext Result.failure(Exception("RSA-PSS signing failed. Fail closed."))
+
+            val request = Request.Builder()
+                .url("$baseUrl$endpoint")
+                .header("KALSHI-ACCESS-KEY", kid)
+                .header("KALSHI-ACCESS-TIMESTAMP", timestamp.toString())
+                .header("KALSHI-ACCESS-SIGNATURE", signature)
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(Exception("HTTP ${response.code}: ${response.message}"))
+            }
+
+            val body = response.body?.string() ?: return@withContext Result.failure(Exception("Empty body"))
+            val json = JSONObject(body)
+            val o = json.optJSONObject("order") ?: json
+
+            val priceVal = o.optString("price").toDoubleOrNull()?.let { (it * 100.0).roundToInt() }
+                ?: o.optInt("yes_price", o.optInt("no_price", 0))
+            val countVal = o.optInt("count", 1)
+            val filledVal = o.optInt("filled_count", 0)
+            val remainingVal = o.optInt("remaining_count", countVal - filledVal)
+            val avgFillPrice = if (o.has("avg_fill_price") && !o.isNull("avg_fill_price")) o.optDouble("avg_fill_price") else null
+            val feesPaid = o.optDouble("fees_paid", 0.0)
+
+            Result.success(
+                KalshiOrderResponse(
+                    orderId = o.optString("order_id", orderId),
+                    clientOrderId = o.optString("client_order_id"),
+                    ticker = o.optString("ticker"),
+                    status = o.optString("status", "resting"),
+                    action = o.optString("action", "buy"),
+                    side = o.optString("side", "bid"),
+                    count = countVal,
+                    filledCount = filledVal,
+                    price = priceVal,
+                    placeTimeMs = parseIsoTimeToMs(o.optString("created_time")),
+                    remainingCount = remainingVal,
+                    averageFillPrice = avgFillPrice,
+                    feesCents = feesPaid * 100.0
+                )
+            )
         } catch (e: Exception) {
             Result.failure(e)
         }

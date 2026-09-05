@@ -12,14 +12,17 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         EngineCycleEntity::class,
         PredictionEntity::class,
         BacktestRecordEntity::class,
-        AdaptiveCalibrationEntity::class
+        AdaptiveCalibrationEntity::class,
+        KalshiOrderRecordEntity::class,
+        RealizedProfitLedgerEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun engineDao(): EngineDao
+    abstract fun kalshiDao(): KalshiDao
 
     companion object {
         @Volatile
@@ -77,6 +80,58 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                try {
+                    db.execSQL("""
+                        CREATE TABLE IF NOT EXISTS kalshi_orders (
+                            clientOrderId TEXT NOT NULL PRIMARY KEY,
+                            orderId TEXT,
+                            ticker TEXT NOT NULL,
+                            side TEXT NOT NULL,
+                            action TEXT NOT NULL DEFAULT 'buy',
+                            requestedCount INTEGER NOT NULL,
+                            filledCount INTEGER NOT NULL DEFAULT 0,
+                            remainingCount INTEGER NOT NULL,
+                            limitPriceCents INTEGER NOT NULL,
+                            averageFillPriceCents REAL,
+                            feesCents REAL NOT NULL DEFAULT 0.0,
+                            lifecycleState TEXT NOT NULL,
+                            placedTimestamp INTEGER NOT NULL,
+                            updatedTimestamp INTEGER NOT NULL,
+                            failureReason TEXT
+                        )
+                    """.trimIndent())
+                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_kalshi_orders_clientOrderId ON kalshi_orders(clientOrderId)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS index_kalshi_orders_orderId ON kalshi_orders(orderId)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS index_kalshi_orders_ticker ON kalshi_orders(ticker)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS index_kalshi_orders_lifecycleState ON kalshi_orders(lifecycleState)")
+
+                    db.execSQL("""
+                        CREATE TABLE IF NOT EXISTS realized_profit_ledger (
+                            tradeId TEXT NOT NULL PRIMARY KEY,
+                            contractTicker TEXT NOT NULL,
+                            orderId TEXT NOT NULL,
+                            clientOrderId TEXT NOT NULL,
+                            entryCostDollars REAL NOT NULL,
+                            settlementPriceDollars REAL NOT NULL,
+                            feesDollars REAL NOT NULL,
+                            realizedPnlDollars REAL NOT NULL,
+                            timestamp INTEGER NOT NULL,
+                            capitalSource TEXT NOT NULL,
+                            eligibleNextTradeCapitalDollars REAL NOT NULL,
+                            isWin INTEGER NOT NULL
+                        )
+                    """.trimIndent())
+                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_realized_profit_ledger_tradeId ON realized_profit_ledger(tradeId)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS index_realized_profit_ledger_contractTicker ON realized_profit_ledger(contractTicker)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS index_realized_profit_ledger_timestamp ON realized_profit_ledger(timestamp)")
+                } catch (e: Exception) {
+                    // Migration safety
+                }
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -84,7 +139,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "qty_telemetry_database.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .fallbackToDestructiveMigrationOnDowngrade(dropAllTables = true)
                     .build()
