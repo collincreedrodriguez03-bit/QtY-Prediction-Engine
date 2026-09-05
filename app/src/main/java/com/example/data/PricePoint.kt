@@ -9,7 +9,11 @@ data class PricePoint(
     val exchange: String = "BINANCE",
     val volume: Double = 0.0,
     val bidPrice: Double = price,
-    val askPrice: Double = price
+    val askPrice: Double = price,
+    val quoteCurrency: String = "USD",
+    val baseVolumeBtc: Double = volume,
+    val quoteVolumeUsd: Double = 0.0,
+    val exchangeTimestamp: Long = timestamp
 )
 
 /**

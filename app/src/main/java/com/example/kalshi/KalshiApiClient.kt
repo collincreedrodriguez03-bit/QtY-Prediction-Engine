@@ -24,13 +24,13 @@ import kotlin.math.roundToInt
  * 3. Authenticated balance and position checking
  * 4. Submitting limit/market orders with duplicate protection and fill tracking
  */
-class KalshiApiClient(
+open class KalshiApiClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(4000, TimeUnit.MILLISECONDS)
         .readTimeout(4000, TimeUnit.MILLISECONDS)
         .writeTimeout(4000, TimeUnit.MILLISECONDS)
         .build(),
-    private val baseUrl: String = "https://external-api.kalshi.com/trade-api/v2"
+    private val baseUrl: String = "https://api.elections.kalshi.com/trade-api/v2"
 ) {
     companion object {
         private const val TAG = "KalshiApiClient"
@@ -53,7 +53,7 @@ class KalshiApiClient(
         } catch (_: Throwable) {}
     }
 
-    fun setCredentials(keyId: String, privateKeyPemOrBase64: String) {
+    open fun setCredentials(keyId: String, privateKeyPemOrBase64: String) {
         val trimmedKey = keyId.trim()
         if (trimmedKey.isEmpty()) {
             this.keyId = null
@@ -76,7 +76,7 @@ class KalshiApiClient(
         this.privateKey = null
     }
 
-    fun isAuthenticated(): Boolean {
+    open fun isAuthenticated(): Boolean {
         return !keyId.isNullOrBlank() && privateKey != null
     }
 
@@ -84,15 +84,21 @@ class KalshiApiClient(
      * Finds the currently active 15-minute BTC contract on Kalshi.
      * Public endpoint: /markets?series_ticker=KXBTC15M&status=active
      */
-    suspend fun getActiveBtc15mContracts(): Result<List<KalshiMarket>> = withContext(Dispatchers.IO) {
+    open suspend fun getActiveBtc15mContracts(): Result<List<KalshiMarket>> = withContext(Dispatchers.IO) {
         try {
-            val path = "/markets?series_ticker=$BTC_15M_SERIES&status=active"
-            val request = Request.Builder()
+            // First try status=open, fallback to status=active
+            var path = "/markets?series_ticker=$BTC_15M_SERIES&status=open"
+            var request = Request.Builder()
                 .url("$baseUrl$path")
                 .get()
                 .build()
 
-            val response = client.newCall(request).execute()
+            var response = client.newCall(request).execute()
+            if (!response.isSuccessful && response.code == 400) {
+                path = "/markets?series_ticker=$BTC_15M_SERIES&status=active"
+                request = Request.Builder().url("$baseUrl$path").get().build()
+                response = client.newCall(request).execute()
+            }
             if (!response.isSuccessful) {
                 val err = when (response.code) {
                     429 -> "Rate limit exceeded (HTTP 429)"
@@ -173,7 +179,7 @@ class KalshiApiClient(
      * Parses both integer cent representation ("orderbook") and fixed-point string representation ("orderbook_fp").
      * Never manufactures missing data.
      */
-    suspend fun getOrderBook(ticker: String, depth: Int = 20): Result<KalshiOrderBookSnapshot> = withContext(Dispatchers.IO) {
+    open suspend fun getOrderBook(ticker: String, depth: Int = 20): Result<KalshiOrderBookSnapshot> = withContext(Dispatchers.IO) {
         if (ticker.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("Ticker cannot be blank"))
         }
@@ -297,7 +303,7 @@ class KalshiApiClient(
     /**
      * Checks authenticated user portfolio cash balance and total portfolio value.
      */
-    suspend fun getPortfolioBalance(): Result<KalshiBalance> = withContext(Dispatchers.IO) {
+    open suspend fun getPortfolioBalance(): Result<KalshiBalance> = withContext(Dispatchers.IO) {
         val kid = keyId
         val pk = privateKey
         if (kid == null || pk == null) {
@@ -349,7 +355,7 @@ class KalshiApiClient(
     /**
      * Gets user's open positions from /portfolio/positions.
      */
-    suspend fun getPositions(): Result<List<KalshiPosition>> = withContext(Dispatchers.IO) {
+    open suspend fun getPositions(): Result<List<KalshiPosition>> = withContext(Dispatchers.IO) {
         val kid = keyId
         val pk = privateKey
         if (kid == null || pk == null) {
@@ -417,7 +423,7 @@ class KalshiApiClient(
      * Submits a new order to Kalshi V2 /portfolio/orders.
      * Enforces clientOrderId to prevent duplicate submissions.
      */
-    suspend fun submitOrder(order: KalshiOrderRequest): Result<KalshiOrderResponse> = withContext(Dispatchers.IO) {
+    open suspend fun submitOrder(order: KalshiOrderRequest): Result<KalshiOrderResponse> = withContext(Dispatchers.IO) {
         val kid = keyId
         val pk = privateKey
         if (kid == null || pk == null) {
@@ -511,7 +517,7 @@ class KalshiApiClient(
         val kid = keyId
         val pk = privateKey
         if (kid == null || pk == null) {
-            return@withContext Result.failure(Exception("Account not authenticated with Kalshi credentials"))
+            return@withContext Result.failure(Exception("Account not authenticated with Kalshi credentials. Fail closed."))
         }
 
         if (orderId.isBlank()) {
@@ -539,6 +545,104 @@ class KalshiApiClient(
             Result.success(true)
         } catch (e: Exception) {
             SafeLog.e(TAG, "Cancel failure for order $orderId: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Retrieves currently open/resting orders:
+     * GET /portfolio/orders?status=resting
+     */
+    suspend fun getOpenOrders(): Result<List<KalshiOrderResponse>> = withContext(Dispatchers.IO) {
+        val kid = keyId
+        val pk = privateKey
+        if (kid == null || pk == null) {
+            return@withContext Result.failure(Exception("Account not authenticated with Kalshi credentials. Fail closed."))
+        }
+
+        try {
+            val endpoint = "/portfolio/orders?status=resting"
+            val timestamp = System.currentTimeMillis()
+            val signature = KalshiSigner.signMessage(timestamp, "GET", endpoint, pk)
+
+            val request = Request.Builder()
+                .url("$baseUrl$endpoint")
+                .header("KALSHI-ACCESS-KEY", kid)
+                .header("KALSHI-ACCESS-TIMESTAMP", timestamp.toString())
+                .header("KALSHI-ACCESS-SIGNATURE", signature)
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(Exception("HTTP ${response.code}: ${response.message}"))
+            }
+
+            val body = response.body?.string() ?: return@withContext Result.failure(Exception("Empty body"))
+            val json = JSONObject(body)
+            val ordersArr = json.optJSONArray("orders") ?: return@withContext Result.success(emptyList())
+
+            val list = mutableListOf<KalshiOrderResponse>()
+            for (i in 0 until ordersArr.length()) {
+                val o = ordersArr.getJSONObject(i)
+                list.add(
+                    KalshiOrderResponse(
+                        orderId = o.optString("order_id"),
+                        clientOrderId = o.optString("client_order_id"),
+                        ticker = o.optString("ticker"),
+                        status = o.optString("status", "resting"),
+                        action = o.optString("action", "buy"),
+                        side = o.optString("side", "yes"),
+                        count = o.optInt("count", 1),
+                        filledCount = o.optInt("filled_count", 0),
+                        price = o.optInt("yes_price", o.optInt("no_price", 50)),
+                        placeTimeMs = parseIsoTimeToMs(o.optString("created_time"))
+                    )
+                )
+            }
+            Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Retrieves market details and settlement information for a specific ticker:
+     * GET /markets/{ticker}
+     */
+    suspend fun getMarketSettlement(ticker: String): Result<KalshiMarket> = withContext(Dispatchers.IO) {
+        if (ticker.isBlank()) return@withContext Result.failure(IllegalArgumentException("Ticker cannot be blank"))
+        try {
+            val path = "/markets/$ticker"
+            val request = Request.Builder().url("$baseUrl$path").get().build()
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(Exception("HTTP ${response.code}: ${response.message}"))
+            }
+            val body = response.body?.string() ?: return@withContext Result.failure(Exception("Empty body"))
+            val json = JSONObject(body)
+            val m = json.optJSONObject("market") ?: json
+            val floorStrike = m.optDouble("floor_strike", Double.NaN)
+            val market = KalshiMarket(
+                ticker = m.optString("ticker"),
+                eventTicker = m.optString("event_ticker"),
+                seriesTicker = m.optString("series_ticker", BTC_15M_SERIES),
+                title = m.optString("title"),
+                subtitle = m.optString("subtitle"),
+                openTimeMs = parseIsoTimeToMs(m.optString("open_time")),
+                closeTimeMs = parseIsoTimeToMs(m.optString("close_time")),
+                expirationTimeMs = parseIsoTimeToMs(m.optString("expiration_time")),
+                status = m.optString("status"),
+                yesBid = m.optInt("yes_bid", 0),
+                yesAsk = m.optInt("yes_ask", 0),
+                noBid = m.optInt("no_bid", 0),
+                noAsk = m.optInt("no_ask", 0),
+                lastPrice = m.optInt("last_price", 0),
+                strikePrice = if (floorStrike.isNaN()) null else floorStrike,
+                strikeType = m.optString("strike_type", "greater")
+            )
+            Result.success(market)
+        } catch (e: Exception) {
             Result.failure(e)
         }
     }

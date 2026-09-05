@@ -29,11 +29,12 @@ data class PredictionRecord(
     val timestamp: Long = System.currentTimeMillis(),
     val inputs: IndicatorSnapshot,
     val decision: String, // "UP" | "DOWN" | "NO-TRADE"
-    val score: Double,
+    val score: Double, // raw_model_score
     val strength: String, // "WEAK" | "MEDIUM" | "STRONG"
     val predictedPrice: Double,
     val currentPrice: Double = predictedPrice,
     val settlementReference: Double = currentPrice,
+    val settlementMethodology: String = "15M_ROLLING_WINDOW",
     val predictionHorizon: Int = 30, // seconds
     val maturityTimestamp: Long = timestamp + (predictionHorizon * 1000L),
     val calibratedScore: Double? = null,
@@ -47,10 +48,17 @@ data class PredictionRecord(
     val maturityTimestamp90s: Long = timestamp + 90_000L,
     var actualPrice90s: Double? = null,
     var result90s: String? = null,
+    // Source / exchange provenance and market timestamp
+    val sourceExchange: String = "CONSOLIDATED_USD",
+    val marketTimestamp: Long = timestamp,
     // Kalshi order and execution lineage fields
     var kalshiContractTicker: String? = null,
+    var strikePrice: Double? = null,
     var kalshiOrderId: String? = null,
     var kalshiOrderStatus: String? = null,
     var kalshiFilledCount: Int? = null,
-    var kalshiOrderPrice: Int? = null
-)
+    var kalshiOrderPrice: Int? = null,
+    var executionPrice: Double? = null
+) {
+    val raw_model_score: Double get() = score
+}

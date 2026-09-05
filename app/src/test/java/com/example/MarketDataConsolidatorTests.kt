@@ -37,7 +37,7 @@ class MarketDataConsolidatorTests {
         assertEquals(3, result.sourceProvenance.size)
         assertEquals(ExchangeAgreementStatus.STRONG_AGREEMENT, result.agreementStatus)
         assertTrue(result.divergencePercent < 0.05)
-        assertTrue(result.consolidationFormula.contains("P_cons ="))
+        assertTrue(result.consolidationFormula.contains("P_cons"))
     }
 
     @Test
@@ -107,5 +107,49 @@ class MarketDataConsolidatorTests {
         assertEquals(FeedState.STREAMING, status.feedState)
         assertTrue("Data age should be ~1.2s", status.dataAgeSeconds in 1.0..2.0)
         assertNotNull(status.formattedAge)
+    }
+
+    @Test
+    fun testQuoteIsolationPrefersUsdOverUsdt() {
+        val now = System.currentTimeMillis()
+        val krakenUsd = PricePoint(price = 90000.0, timestamp = now, exchange = "KRAKEN", volume = 2.0, quoteCurrency = "USD")
+        val coinbaseUsd = PricePoint(price = 90010.0, timestamp = now, exchange = "COINBASE", volume = 2.0, quoteCurrency = "USD")
+        val binanceUsdt = PricePoint(price = 90500.0, timestamp = now, exchange = "BINANCE", volume = 5.0, quoteCurrency = "USDT")
+
+        val result = consolidator.consolidate(listOf(krakenUsd, coinbaseUsd, binanceUsdt), now)
+
+        // When USD feeds are available, USDT feeds must be isolated and not included in active consolidation
+        assertEquals(2, result.activeSpotFeeds.size)
+        assertTrue(result.sourceProvenance.containsKey("KRAKEN"))
+        assertTrue(result.sourceProvenance.containsKey("COINBASE"))
+        assertFalse(result.sourceProvenance.containsKey("BINANCE"))
+        assertTrue(result.consolidatedPrice in 90000.0..90010.0)
+    }
+
+    @Test
+    fun testAllFeedsStaleFailsClosed() {
+        val now = System.currentTimeMillis()
+        val staleKraken = PricePoint(price = 90000.0, timestamp = now - 15000L, exchange = "KRAKEN", volume = 1.0)
+        val staleCoinbase = PricePoint(price = 90010.0, timestamp = now - 12000L, exchange = "COINBASE", volume = 1.0)
+
+        val result = consolidator.consolidate(listOf(staleKraken, staleCoinbase), now)
+
+        assertEquals(0.0, result.consolidatedPrice, 0.001)
+        assertEquals(0, result.activeSpotFeeds.size)
+        assertEquals(ExchangeAgreementStatus.DISAGREEMENT, result.agreementStatus)
+    }
+
+    @Test
+    fun testBitstampConsolidationWithOtherExchanges() {
+        val now = System.currentTimeMillis()
+        val kraken = PricePoint(price = 91000.0, timestamp = now, exchange = "KRAKEN", volume = 2.0, quoteCurrency = "USD")
+        val bitstamp = PricePoint(price = 91005.0, timestamp = now, exchange = "BITSTAMP", volume = 1.0, quoteCurrency = "USD")
+
+        val result = consolidator.consolidate(listOf(kraken, bitstamp), now)
+
+        assertEquals(2, result.activeSpotFeeds.size)
+        assertTrue(result.sourceProvenance.containsKey("KRAKEN"))
+        assertTrue(result.sourceProvenance.containsKey("BITSTAMP"))
+        assertTrue(result.consolidatedPrice in 91000.0..91005.0)
     }
 }

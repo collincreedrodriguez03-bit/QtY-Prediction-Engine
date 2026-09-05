@@ -49,7 +49,7 @@ class BtcDataFeed(
         const val COINBASE_REST_URL = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
 
         const val KRAKEN_WS_URL = "wss://ws.kraken.com"
-        const val KRAKEN_REST_URL = "https://api.kraken.com/0/public/Ticker?pair=XBTUSDT"
+        const val KRAKEN_REST_URL = "https://api.kraken.com/0/public/Ticker?pair=XBTUSD"
 
         const val BITSTAMP_REST_URL = "https://www.bitstamp.net/api/v2/ticker/btcusd/"
     }
@@ -60,13 +60,28 @@ class BtcDataFeed(
     // Latest raw PricePoints per exchange
     private val latestSpotPoints = ConcurrentHashMap<String, PricePoint>()
 
-    // Tick counters per exchange
-    val binanceTickCount = AtomicLong(0L)
-    val coinbaseTickCount = AtomicLong(0L)
-    val krakenTickCount = AtomicLong(0L)
-    val bitstampTickCount = AtomicLong(0L)
+    // Separate Market Ticks (WS messages) from REST Fetches (polling)
+    val binanceMarketTicks = AtomicLong(0L)
+    val coinbaseMarketTicks = AtomicLong(0L)
+    val krakenMarketTicks = AtomicLong(0L)
+    val bitstampMarketTicks = AtomicLong(0L)
 
-    // Factual Status Map for connected spot exchanges
+    val binanceRestFetches = AtomicLong(0L)
+    val coinbaseRestFetches = AtomicLong(0L)
+    val krakenRestFetches = AtomicLong(0L)
+    val bitstampRestFetches = AtomicLong(0L)
+
+    // Backwards compatibility references
+    val binanceTickCount: AtomicLong get() = binanceMarketTicks
+    val coinbaseTickCount: AtomicLong get() = coinbaseMarketTicks
+    val krakenTickCount: AtomicLong get() = krakenMarketTicks
+    val bitstampTickCount: AtomicLong get() = bitstampRestFetches
+
+    // Hysteresis tracking: require 3 consecutive successful WS messages before leaving REST fallback
+    private val consecutiveWsSuccess = ConcurrentHashMap<String, Int>()
+    private val isRestFallbackActive = ConcurrentHashMap<String, Boolean>()
+
+    // Factual Status Map for connected spot exchanges (initially DISCONNECTED until verified)
     private val _sourceStatuses = MutableStateFlow<Map<String, DataSourceStatus>>(
         mapOf(
             "BINANCE" to DataSourceStatus(
@@ -74,7 +89,7 @@ class BtcDataFeed(
                 displayName = "Binance Spot",
                 sourceType = SourceType.BTC_SPOT,
                 connectionType = ConnectionType.WEBSOCKET,
-                feedState = FeedState.CONNECTED,
+                feedState = FeedState.DISCONNECTED,
                 rateLimitInfo = "Unlimited WS (bookTicker)"
             ),
             "COINBASE" to DataSourceStatus(
@@ -82,7 +97,7 @@ class BtcDataFeed(
                 displayName = "Coinbase Spot",
                 sourceType = SourceType.BTC_SPOT,
                 connectionType = ConnectionType.WEBSOCKET,
-                feedState = FeedState.CONNECTED,
+                feedState = FeedState.DISCONNECTED,
                 rateLimitInfo = "Unlimited WS (ticker)"
             ),
             "KRAKEN" to DataSourceStatus(
@@ -90,7 +105,7 @@ class BtcDataFeed(
                 displayName = "Kraken Spot",
                 sourceType = SourceType.BTC_SPOT,
                 connectionType = ConnectionType.WEBSOCKET,
-                feedState = FeedState.CONNECTED,
+                feedState = FeedState.DISCONNECTED,
                 rateLimitInfo = "Unlimited WS (ticker)"
             ),
             "BITSTAMP" to DataSourceStatus(
@@ -98,7 +113,7 @@ class BtcDataFeed(
                 displayName = "Bitstamp Spot",
                 sourceType = SourceType.BTC_SPOT,
                 connectionType = ConnectionType.REST,
-                feedState = FeedState.CONNECTED,
+                feedState = FeedState.DISCONNECTED,
                 rateLimitInfo = "8000 req/10min (REST)"
             )
         )
@@ -123,17 +138,27 @@ class BtcDataFeed(
             while (isActive) {
                 try {
                     val now = System.currentTimeMillis()
+
+                    // Bitstamp REST polling: actively participates in the live consolidation path
+                    fetchBitstampPrice()
+
                     // Fallback REST sync if any exchange WS is silent for > 4 seconds
                     val binanceAge = now - (_sourceStatuses.value["BINANCE"]?.lastUpdateTimestamp ?: 0L)
                     if (binanceAge > 4000L) {
+                        isRestFallbackActive["BINANCE"] = true
+                        consecutiveWsSuccess["BINANCE"] = 0
                         fetchBinancePrice()
                     }
                     val krakenAge = now - (_sourceStatuses.value["KRAKEN"]?.lastUpdateTimestamp ?: 0L)
                     if (krakenAge > 4000L) {
+                        isRestFallbackActive["KRAKEN"] = true
+                        consecutiveWsSuccess["KRAKEN"] = 0
                         fetchKrakenPrice()
                     }
                     val coinbaseAge = now - (_sourceStatuses.value["COINBASE"]?.lastUpdateTimestamp ?: 0L)
                     if (coinbaseAge > 4000L) {
+                        isRestFallbackActive["COINBASE"] = true
+                        consecutiveWsSuccess["COINBASE"] = 0
                         fetchCoinbasePrice()
                     }
                 } catch (e: Exception) {
@@ -153,6 +178,10 @@ class BtcDataFeed(
         binanceWs?.close(1000, "App paused")
         coinbaseWs?.close(1000, "App paused")
         krakenWs?.close(1000, "App paused")
+        updateStatus("BINANCE", FeedState.DISCONNECTED, null, "Stopped", null, binanceMarketTicks.get())
+        updateStatus("COINBASE", FeedState.DISCONNECTED, null, "Stopped", null, coinbaseMarketTicks.get())
+        updateStatus("KRAKEN", FeedState.DISCONNECTED, null, "Stopped", null, krakenMarketTicks.get())
+        updateStatus("BITSTAMP", FeedState.DISCONNECTED, null, "Stopped", null, bitstampRestFetches.get())
     }
 
     // ==========================================
@@ -164,7 +193,7 @@ class BtcDataFeed(
             val request = Request.Builder().url(BINANCE_WS_URL).build()
             binanceWs = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    updateStatus("BINANCE", FeedState.STREAMING, null, "WS Connected (btcusdt)", null, binanceTickCount.get())
+                    updateStatus("BINANCE", FeedState.STREAMING, null, "WS Connected (btcusdt)", null, binanceMarketTicks.get())
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -178,14 +207,22 @@ class BtcDataFeed(
 
                         if (mid > 0.0) {
                             val now = System.currentTimeMillis()
-                            val count = binanceTickCount.incrementAndGet()
+                            val count = binanceMarketTicks.incrementAndGet()
+                            val succ = (consecutiveWsSuccess["BINANCE"] ?: 0) + 1
+                            consecutiveWsSuccess["BINANCE"] = succ
+                            if (succ >= 3) isRestFallbackActive["BINANCE"] = false
+
                             val pt = PricePoint(
                                 price = mid,
                                 timestamp = now,
                                 exchange = "BINANCE",
                                 volume = bidQty + askQty,
                                 bidPrice = bid,
-                                askPrice = ask
+                                askPrice = ask,
+                                quoteCurrency = "USDT",
+                                baseVolumeBtc = bidQty + askQty,
+                                quoteVolumeUsd = (bidQty + askQty) * mid,
+                                exchangeTimestamp = now
                             )
                             latestSpotPoints["BINANCE"] = pt
                             updateStatus("BINANCE", FeedState.STREAMING, mid, "Bid: $bid | Ask: $ask", null, count)
@@ -196,7 +233,13 @@ class BtcDataFeed(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    updateStatus("BINANCE", FeedState.CONNECTED, null, "WS Reconnecting", t.message, binanceTickCount.get())
+                    consecutiveWsSuccess["BINANCE"] = 0
+                    isRestFallbackActive["BINANCE"] = true
+                    updateStatus("BINANCE", FeedState.RECONNECTING, null, "WS Reconnecting", t.message, binanceMarketTicks.get())
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    updateStatus("BINANCE", FeedState.DISCONNECTED, null, "WS Closed ($reason)", null, binanceMarketTicks.get())
                 }
             })
         } catch (e: Exception) {
@@ -220,17 +263,21 @@ class BtcDataFeed(
                         val mid = if (bid > 0.0 && ask > 0.0) (bid + ask) / 2.0 else 0.0
 
                         if (mid > 0.0) {
-                            val count = binanceTickCount.incrementAndGet()
+                            val count = binanceRestFetches.incrementAndGet()
                             val pt = PricePoint(
                                 price = mid,
                                 timestamp = now,
                                 exchange = "BINANCE",
                                 volume = bidQty + askQty,
                                 bidPrice = bid,
-                                askPrice = ask
+                                askPrice = ask,
+                                quoteCurrency = "USDT",
+                                baseVolumeBtc = bidQty + askQty,
+                                quoteVolumeUsd = (bidQty + askQty) * mid,
+                                exchangeTimestamp = now
                             )
                             latestSpotPoints["BINANCE"] = pt
-                            updateStatus("BINANCE", FeedState.ACTIVE, mid, "REST Fallback", null, count)
+                            updateStatus("BINANCE", FeedState.POLLING, mid, "REST Fallback", null, binanceMarketTicks.get())
                             return@withContext pt
                         }
                     }
@@ -257,7 +304,7 @@ class BtcDataFeed(
                         put("channels", org.json.JSONArray(listOf("ticker")))
                     }
                     webSocket.send(subMessage.toString())
-                    updateStatus("COINBASE", FeedState.STREAMING, null, "WS Subscribed (BTC-USD)", null, coinbaseTickCount.get())
+                    updateStatus("COINBASE", FeedState.STREAMING, null, "WS Subscribed (BTC-USD)", null, coinbaseMarketTicks.get())
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -272,14 +319,22 @@ class BtcDataFeed(
 
                             if (price > 0.0) {
                                 val now = System.currentTimeMillis()
-                                val count = coinbaseTickCount.incrementAndGet()
+                                val count = coinbaseMarketTicks.incrementAndGet()
+                                val succ = (consecutiveWsSuccess["COINBASE"] ?: 0) + 1
+                                consecutiveWsSuccess["COINBASE"] = succ
+                                if (succ >= 3) isRestFallbackActive["COINBASE"] = false
+
                                 val pt = PricePoint(
                                     price = price,
                                     timestamp = now,
                                     exchange = "COINBASE",
                                     volume = vol,
                                     bidPrice = bid,
-                                    askPrice = ask
+                                    askPrice = ask,
+                                    quoteCurrency = "USD",
+                                    baseVolumeBtc = vol,
+                                    quoteVolumeUsd = vol * price,
+                                    exchangeTimestamp = now
                                 )
                                 latestSpotPoints["COINBASE"] = pt
                                 updateStatus("COINBASE", FeedState.STREAMING, price, "Spot WS", null, count)
@@ -291,7 +346,13 @@ class BtcDataFeed(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    updateStatus("COINBASE", FeedState.CONNECTED, null, "WS Reconnecting", t.message, coinbaseTickCount.get())
+                    consecutiveWsSuccess["COINBASE"] = 0
+                    isRestFallbackActive["COINBASE"] = true
+                    updateStatus("COINBASE", FeedState.RECONNECTING, null, "WS Reconnecting", t.message, coinbaseMarketTicks.get())
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    updateStatus("COINBASE", FeedState.DISCONNECTED, null, "WS Closed ($reason)", null, coinbaseMarketTicks.get())
                 }
             })
         } catch (e: Exception) {
@@ -311,17 +372,21 @@ class BtcDataFeed(
                         val data = json.optJSONObject("data")
                         val amount = data?.optString("amount")?.toDoubleOrNull() ?: 0.0
                         if (amount > 0.0) {
-                            val count = coinbaseTickCount.incrementAndGet()
+                            val count = coinbaseRestFetches.incrementAndGet()
                             val pt = PricePoint(
                                 price = amount,
                                 timestamp = now,
                                 exchange = "COINBASE",
                                 volume = 1.0,
                                 bidPrice = amount,
-                                askPrice = amount
+                                askPrice = amount,
+                                quoteCurrency = "USD",
+                                baseVolumeBtc = 1.0,
+                                quoteVolumeUsd = amount,
+                                exchangeTimestamp = now
                             )
                             latestSpotPoints["COINBASE"] = pt
-                            updateStatus("COINBASE", FeedState.ACTIVE, amount, "REST Spot", null, count)
+                            updateStatus("COINBASE", FeedState.POLLING, amount, "REST Spot", null, coinbaseMarketTicks.get())
                             return@withContext pt
                         }
                     }
@@ -344,11 +409,11 @@ class BtcDataFeed(
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     val subMessage = JSONObject().apply {
                         put("event", "subscribe")
-                        put("pair", org.json.JSONArray(listOf("XBT/USDT")))
+                        put("pair", org.json.JSONArray(listOf("XBT/USD")))
                         put("subscription", JSONObject().apply { put("name", "ticker") })
                     }
                     webSocket.send(subMessage.toString())
-                    updateStatus("KRAKEN", FeedState.STREAMING, null, "WS Subscribed (XBT/USDT)", null, krakenTickCount.get())
+                    updateStatus("KRAKEN", FeedState.STREAMING, null, "WS Subscribed (XBT/USD)", null, krakenMarketTicks.get())
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -357,7 +422,7 @@ class BtcDataFeed(
                             val jsonArr = org.json.JSONArray(text)
                             if (jsonArr.length() >= 2) {
                                 val pair = if (jsonArr.length() >= 4) jsonArr.optString(3) else ""
-                                if (pair.isNotEmpty() && pair != "XBT/USDT") {
+                                if (pair.isNotEmpty() && pair != "XBT/USD" && pair != "XBT/USDT") {
                                     return
                                 }
                                 val tickerData = jsonArr.optJSONObject(1)
@@ -374,14 +439,22 @@ class BtcDataFeed(
 
                                     if (price > 0.0) {
                                         val now = System.currentTimeMillis()
-                                        val count = krakenTickCount.incrementAndGet()
+                                        val count = krakenMarketTicks.incrementAndGet()
+                                        val succ = (consecutiveWsSuccess["KRAKEN"] ?: 0) + 1
+                                        consecutiveWsSuccess["KRAKEN"] = succ
+                                        if (succ >= 3) isRestFallbackActive["KRAKEN"] = false
+
                                         val pt = PricePoint(
                                             price = price,
                                             timestamp = now,
                                             exchange = "KRAKEN",
                                             volume = vol,
                                             bidPrice = bid,
-                                            askPrice = ask
+                                            askPrice = ask,
+                                            quoteCurrency = "USD",
+                                            baseVolumeBtc = vol,
+                                            quoteVolumeUsd = vol * price,
+                                            exchangeTimestamp = now
                                         )
                                         latestSpotPoints["KRAKEN"] = pt
                                         updateStatus("KRAKEN", FeedState.STREAMING, price, "XBT Spot WS", null, count)
@@ -395,7 +468,13 @@ class BtcDataFeed(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    updateStatus("KRAKEN", FeedState.CONNECTED, null, "WS Reconnecting", t.message, krakenTickCount.get())
+                    consecutiveWsSuccess["KRAKEN"] = 0
+                    isRestFallbackActive["KRAKEN"] = true
+                    updateStatus("KRAKEN", FeedState.RECONNECTING, null, "WS Reconnecting", t.message, krakenMarketTicks.get())
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    updateStatus("KRAKEN", FeedState.DISCONNECTED, null, "WS Closed ($reason)", null, krakenMarketTicks.get())
                 }
             })
         } catch (e: Exception) {
@@ -413,7 +492,9 @@ class BtcDataFeed(
                     if (!body.isNullOrBlank()) {
                         val json = JSONObject(body)
                         val result = json.optJSONObject("result")
-                        val pairData = result?.optJSONObject("XBTUSDT")
+                        val pairData = result?.optJSONObject("XXBTZUSD")
+                            ?: result?.optJSONObject("XBTUSD")
+                            ?: result?.optJSONObject("XBTUSDT")
                         if (pairData != null) {
                             val c = pairData.optJSONArray("c")
                             val a = pairData.optJSONArray("a")
@@ -426,17 +507,21 @@ class BtcDataFeed(
                             val vol = v?.optString(1)?.toDoubleOrNull() ?: 1.0
 
                             if (price > 0.0) {
-                                val count = krakenTickCount.incrementAndGet()
+                                val count = krakenRestFetches.incrementAndGet()
                                 val pt = PricePoint(
                                     price = price,
                                     timestamp = now,
                                     exchange = "KRAKEN",
                                     volume = vol,
                                     bidPrice = bid,
-                                    askPrice = ask
+                                    askPrice = ask,
+                                    quoteCurrency = "USD",
+                                    baseVolumeBtc = vol,
+                                    quoteVolumeUsd = vol * price,
+                                    exchangeTimestamp = now
                                 )
                                 latestSpotPoints["KRAKEN"] = pt
-                                updateStatus("KRAKEN", FeedState.ACTIVE, price, "REST Ticker", null, count)
+                                updateStatus("KRAKEN", FeedState.POLLING, price, "REST Ticker", null, krakenMarketTicks.get())
                                 return@withContext pt
                             }
                         }
@@ -450,7 +535,7 @@ class BtcDataFeed(
     }
 
     // ==========================================
-    // 4. BITSTAMP SPOT REST FALLBACK
+    // 4. BITSTAMP SPOT REST (Live Participation)
     // ==========================================
 
     suspend fun fetchBitstampPrice(): PricePoint? = withContext(Dispatchers.IO) {
@@ -468,17 +553,21 @@ class BtcDataFeed(
                         val vol = json.optString("volume").toDoubleOrNull() ?: 1.0
 
                         if (price > 0.0) {
-                            val count = bitstampTickCount.incrementAndGet()
+                            val count = bitstampRestFetches.incrementAndGet()
                             val pt = PricePoint(
                                 price = price,
                                 timestamp = now,
                                 exchange = "BITSTAMP",
                                 volume = vol,
                                 bidPrice = bid,
-                                askPrice = ask
+                                askPrice = ask,
+                                quoteCurrency = "USD",
+                                baseVolumeBtc = vol,
+                                quoteVolumeUsd = vol * price,
+                                exchangeTimestamp = now
                             )
                             latestSpotPoints["BITSTAMP"] = pt
-                            updateStatus("BITSTAMP", FeedState.ACTIVE, price, "REST Spot", null, count)
+                            updateStatus("BITSTAMP", FeedState.POLLING, price, "REST Spot", null, count)
                             return@withContext pt
                         }
                     }
@@ -575,8 +664,16 @@ class BtcDataFeed(
         return latestSpotPoints.values.toList()
     }
 
+    fun getTotalMarketTicks(): Long {
+        return binanceMarketTicks.get() + coinbaseMarketTicks.get() + krakenMarketTicks.get()
+    }
+
+    fun getTotalRestFetches(): Long {
+        return binanceRestFetches.get() + coinbaseRestFetches.get() + krakenRestFetches.get() + bitstampRestFetches.get()
+    }
+
     fun getTotalTicks(): Long {
-        return binanceTickCount.get() + coinbaseTickCount.get() + krakenTickCount.get() + bitstampTickCount.get()
+        return getTotalMarketTicks()
     }
 
     private fun updateStatus(

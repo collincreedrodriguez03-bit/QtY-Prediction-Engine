@@ -120,6 +120,8 @@ data class KalshiVerificationResult(
     val agreement30s: String = "UNCONFIRMED", // "AGREEMENT", "DISAGREEMENT", "NEUTRAL", "UNCONFIRMED"
     val agreement90s: String = "UNCONFIRMED", // "AGREEMENT", "DISAGREEMENT", "NEUTRAL", "UNCONFIRMED"
     val verificationSummary: String = "UNCONFIRMED", // "FULL_AGREEMENT", "PARTIAL_AGREEMENT", "DIVERGENCE", "NEUTRAL", "UNCONFIRMED"
+    val isStaleBook: Boolean = false,
+    val isCrossedBook: Boolean = false,
     val detailExplanation: String = "Awaiting Kalshi verification data"
 )
 

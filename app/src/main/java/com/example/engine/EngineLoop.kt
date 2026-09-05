@@ -215,11 +215,7 @@ class EngineLoop(
                 kalshiFilledCount = resolved.kalshiFilledCount,
                 kalshiOrderPrice = resolved.kalshiOrderPrice
             )
-            repository?.updatePredictionResolution(
-                predictionId = resolved.predictionId,
-                actualPrice = resPrice ?: 0.0,
-                result = resResult
-            )
+            repository?.updatePredictionResolution(resolved)
         }
 
         // Rolling anchor prevents buffer saturation during prolonged sessions

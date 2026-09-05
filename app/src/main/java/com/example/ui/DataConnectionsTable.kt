@@ -188,6 +188,7 @@ private fun DataSourceRow(status: DataSourceStatus) {
         FeedState.ACTIVE -> Color(0xFF00E5FF)
         FeedState.POLLING -> Color(0xFF38BDF8)
         FeedState.CONNECTED -> Color(0xFF00E676)
+        FeedState.RECONNECTING -> Color(0xFFFFD600)
         FeedState.DISCONNECTED -> Color(0xFFFF9100)
         FeedState.ERROR -> Color(0xFFFF5252)
         FeedState.UNAVAILABLE -> Color(0xFF64748B)
@@ -198,6 +199,7 @@ private fun DataSourceRow(status: DataSourceStatus) {
         FeedState.ACTIVE -> "ACTIVE"
         FeedState.POLLING -> "POLLING"
         FeedState.CONNECTED -> "CONNECTED"
+        FeedState.RECONNECTING -> "RECONNECTING"
         FeedState.DISCONNECTED -> "OFFLINE"
         FeedState.ERROR -> "ERROR"
         FeedState.UNAVAILABLE -> "N/A"

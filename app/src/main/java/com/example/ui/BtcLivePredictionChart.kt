@@ -506,6 +506,40 @@ fun BtcLivePredictionChart(
                 }
             }
 
+            // Explicit 90s Projection Status Line (Clearly labeled as PROJECTION, NOT an executed trade)
+            if (prediction != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFF0F172A))
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "90s PROJECTION (NON-EXECUTION PROJECTION ONLY):",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    val projColor = when (prediction.projectedDecision90s) {
+                        "UP" -> Color(0xFF00E676)
+                        "DOWN" -> Color(0xFFFF334B)
+                        else -> Color(0xFF38BDF8)
+                    }
+                    Text(
+                        text = "${prediction.projectedDecision90s} @ $${String.format(Locale.US, "%,.1f", prediction.projectedPrice90s)}",
+                        color = projColor,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+
             // Order-Book Verification Strip (Independent Confirmation Only)
             val verif = engineState.kalshiVerification
             if (verif != null) {

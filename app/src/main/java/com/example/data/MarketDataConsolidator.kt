@@ -41,6 +41,8 @@ class MarketDataConsolidator(
 
     /**
      * Consolidates a list of candidate PricePoints from spot exchanges.
+     * Enforces Quote Isolation: strictly isolates USD from USDT feeds.
+     * Stale feeds receive weight 0.0. If all feeds are stale, fails closed (consolidatedPrice = 0.0).
      */
     fun consolidate(
         spotPoints: List<PricePoint>,
@@ -61,28 +63,33 @@ class MarketDataConsolidator(
                 activeSpotFeeds = emptyList(),
                 divergencePercent = 0.0,
                 agreementStatus = ExchangeAgreementStatus.DISAGREEMENT,
-                consolidationFormula = "P_consolidated = 0.0 (NO ACTIVE FRESH FEEDS)",
+                consolidationFormula = "P_consolidated = 0.0 (NO ACTIVE FRESH FEEDS - FAIL CLOSED)",
                 sourceProvenance = emptyMap()
             )
         }
 
-        if (freshPoints.size == 1) {
-            val single = freshPoints.first()
+        // Quote Isolation: prioritize conforming USD feeds (Coinbase, Bitstamp, Kraken USD)
+        // Never blend USD and USDT directly without quote isolation.
+        val usdPoints = freshPoints.filter { it.quoteCurrency.equals("USD", ignoreCase = true) }
+        val conformingPoints = if (usdPoints.isNotEmpty()) usdPoints else freshPoints
+
+        if (conformingPoints.size == 1) {
+            val single = conformingPoints.first()
             return ConsolidatedMarketState(
                 timestamp = currentTimestamp,
                 consolidatedPrice = single.price,
-                activeSpotFeeds = freshPoints,
+                activeSpotFeeds = conformingPoints,
                 divergencePercent = 0.0,
                 agreementStatus = ExchangeAgreementStatus.SINGLE_EXCHANGE,
-                consolidationFormula = "P_consolidated = ${single.exchange}(${String.format(Locale.US, "%.2f", single.price)})",
+                consolidationFormula = "P_consolidated = ${single.exchange}[${single.quoteCurrency}](${String.format(Locale.US, "%.2f", single.price)})",
                 sourceProvenance = mapOf(single.exchange to single)
             )
         }
 
-        // 2. Measure cross-exchange divergence
-        val minPrice = freshPoints.minOf { it.price }
-        val maxPrice = freshPoints.maxOf { it.price }
-        val meanPrice = freshPoints.map { it.price }.average()
+        // 2. Measure cross-exchange divergence across conforming quote feeds
+        val minPrice = conformingPoints.minOf { it.price }
+        val maxPrice = conformingPoints.maxOf { it.price }
+        val meanPrice = conformingPoints.map { it.price }.average()
         val divergencePct = if (meanPrice > 0.0) ((maxPrice - minPrice) / meanPrice) * 100.0 else 0.0
 
         val agreementStatus = when {
@@ -91,24 +98,21 @@ class MarketDataConsolidator(
             else -> ExchangeAgreementStatus.DISAGREEMENT
         }
 
-        // 3. Compute weighted consolidation
+        // 3. Compute weighted consolidation with exponential decay
         var sumWeightedPrice = 0.0
         var sumWeights = 0.0
         val provenance = mutableMapOf<String, PricePoint>()
         val formulaTerms = mutableListOf<String>()
 
-        for (pt in freshPoints) {
+        for (pt in conformingPoints) {
             provenance[pt.exchange] = pt
             val ageSec = max(0.0, (currentTimestamp - pt.timestamp) / 1000.0)
-            val freshnessW = exp(-decayLambda * ageSec)
-            // Weighting is based on freshness decay across conforming spot feeds,
-            // avoiding incomparable volume units (24h volume vs tick quantity)
-            val combinedW = freshnessW
+            val freshnessW = if (ageSec > (maxAgeMillis / 1000.0)) 0.0 else exp(-decayLambda * ageSec)
 
-            sumWeightedPrice += pt.price * combinedW
-            sumWeights += combinedW
+            sumWeightedPrice += pt.price * freshnessW
+            sumWeights += freshnessW
 
-            formulaTerms.add("${pt.exchange}[${String.format(Locale.US, "%.1f", pt.price)} * ${String.format(Locale.US, "%.2f", combinedW)}]")
+            formulaTerms.add("${pt.exchange}[${String.format(Locale.US, "%.1f", pt.price)} * ${String.format(Locale.US, "%.2f", freshnessW)}]")
         }
 
         val consolidatedPrice = if (sumWeights > 0.0) {
@@ -117,12 +121,13 @@ class MarketDataConsolidator(
             meanPrice
         }
 
-        val formulaStr = "P_cons = ∑(w_i·P_i)/∑w_i = ${String.format(Locale.US, "%.2f", consolidatedPrice)} (div=${String.format(Locale.US, "%.3f", divergencePct)}%)"
+        val quoteTag = conformingPoints.first().quoteCurrency
+        val formulaStr = "P_cons[$quoteTag] = ∑(w_i·P_i)/∑w_i = ${String.format(Locale.US, "%.2f", consolidatedPrice)} (div=${String.format(Locale.US, "%.3f", divergencePct)}%)"
 
         return ConsolidatedMarketState(
             timestamp = currentTimestamp,
             consolidatedPrice = Math.round(consolidatedPrice * 100.0) / 100.0,
-            activeSpotFeeds = freshPoints,
+            activeSpotFeeds = conformingPoints,
             divergencePercent = Math.round(divergencePct * 1000.0) / 1000.0,
             agreementStatus = agreementStatus,
             consolidationFormula = formulaStr,

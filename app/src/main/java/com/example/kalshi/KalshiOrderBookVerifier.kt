@@ -170,6 +170,8 @@ object KalshiOrderBookVerifier {
             agreement30s = agreement30s,
             agreement90s = agreement90s,
             verificationSummary = summary,
+            isStaleBook = isStaleBook,
+            isCrossedBook = isCrossedBook,
             detailExplanation = explanation
         )
     }

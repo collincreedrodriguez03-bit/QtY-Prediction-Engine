@@ -36,7 +36,8 @@ import java.util.concurrent.ConcurrentHashMap
 class KalshiAutomationEngine(
     val apiClient: KalshiApiClient = KalshiApiClient(),
     val priceHistory: PriceHistory,
-    val tradeSizeLimit: Int = 1 // Strict small trade-size limit
+    val tradeSizeLimit: Int = 1, // Strict small trade-size limit
+    val riskEngine: KalshiRiskEngine = KalshiRiskEngine()
 ) {
     companion object {
         private const val TAG = "KalshiAutomationEngine"
@@ -152,6 +153,50 @@ class KalshiAutomationEngine(
                 return
             }
 
+            // Stale market data check (must be within 15 seconds)
+            val latestPrice = priceHistory.getLatest()
+            if (latestPrice != null && (timestamp - latestPrice.timestamp) > 15_000L) {
+                appendLog("Market data is stale (${timestamp - latestPrice.timestamp} ms old > 15000 ms). Failing closed.")
+                return
+            }
+
+            // P0 Mandate 3: Order-Book Verification Hard Gate
+            // UNCONFIRMED, DIVERGENCE, UNAVAILABLE, STALE BOOK, CROSSED BOOK, NEUTRAL -> NO ORDER
+            if (verification.isStaleBook) {
+                appendLog("Execution blocked: Order book is stale (> 30s old). Failing closed.")
+                return
+            }
+            if (verification.isCrossedBook) {
+                appendLog("Execution blocked: Order book is crossed/inverted. Failing closed.")
+                return
+            }
+            if (verification.marketBias == "UNAVAILABLE") {
+                appendLog("Execution blocked: Market bias is UNAVAILABLE. Failing closed.")
+                return
+            }
+            if (verification.marketBias == "NEUTRAL") {
+                appendLog("Execution blocked: Market bias is NEUTRAL. Failing closed.")
+                return
+            }
+            if (verification.verificationSummary == "UNCONFIRMED") {
+                appendLog("Execution blocked: Order book verification is UNCONFIRMED. Failing closed.")
+                return
+            }
+            if (verification.verificationSummary == "DIVERGENCE") {
+                appendLog("Execution blocked: Order book verification shows DIVERGENCE. Failing closed.")
+                return
+            }
+            if (verification.verificationSummary == "NEUTRAL") {
+                appendLog("Execution blocked: Order book verification is NEUTRAL. Failing closed.")
+                return
+            }
+            val isVerifiedAgreement = (verification.verificationSummary == "FULL_AGREEMENT" ||
+                (verification.verificationSummary == "PARTIAL_AGREEMENT" && verification.agreement30s == "AGREEMENT"))
+            if (!isVerifiedAgreement) {
+                appendLog("Execution blocked: Verification summary '${verification.verificationSummary}' not approved. Failing closed.")
+                return
+            }
+
             // Must be authenticated to trade
             if (!currentState.isAuthenticated || !apiClient.isAuthenticated()) {
                 appendLog("Account not authenticated with Kalshi credentials. Failing closed.")
@@ -188,17 +233,6 @@ class KalshiAutomationEngine(
                 return
             }
 
-            // MANDATE 8: Small trade-size enforcement
-            val orderCount = tradeSizeLimit.coerceIn(1, MAX_CONTRACTS_PER_ORDER)
-
-            // Balance check: Ensure sufficient cash balance (max exposure = orderCount * 100 cents)
-            val maxCostCents = orderCount * 100L
-            if (currentState.balance.balanceCents < maxCostCents) {
-                appendLog("Insufficient balance (${currentState.balance.balanceDollars} USD < required ${maxCostCents / 100.0} USD). Failing closed.")
-                _state.value = _state.value.copy(error = "Insufficient Kalshi balance")
-                return
-            }
-
             // Determine side based on QtY Prediction:
             // UP -> buy "yes" contract
             // DOWN -> buy "no" contract
@@ -218,6 +252,32 @@ class KalshiAutomationEngine(
                 if (activeMarket.yesAsk in 1..99) activeMarket.yesAsk else 50
             } else {
                 if (activeMarket.noAsk in 1..99) activeMarket.noAsk else 50
+            }
+
+            // P0 Mandate 4 & 5: Risk-Based Position Sizing & Profit-Only Capital Rule
+            val volBps = (prediction.inputs.volatility / currentBtcPrice) * 10000.0
+            val riskEval = riskEngine.evaluateOrderSizing(prediction, limitPrice, volBps)
+            appendLog(
+                "Risk & Capital Audit: Trade #${riskEngine.getTradeCount() + 1} | " +
+                "Eligible Realized-Profit Capital: $${String.format(java.util.Locale.US, "%.2f", riskEval.eligibleCapitalDollars)} | " +
+                "Risk Allocation: ${(riskEval.allocationFraction * 100).toInt()}% (${riskEval.riskLevel.name}) | " +
+                "Actual Order Size: ${riskEval.actualOrderSize} contract(s)"
+            )
+
+            if (!riskEval.isApproved || riskEval.actualOrderSize <= 0) {
+                appendLog("Order blocked by Risk Engine: ${riskEval.reason}. Failing closed.")
+                return
+            }
+
+            // MANDATE 8: Small trade-size enforcement bounded by hard limit and risk engine
+            val orderCount = minOf(riskEval.actualOrderSize, tradeSizeLimit.coerceIn(1, MAX_CONTRACTS_PER_ORDER))
+
+            // Balance check: Ensure sufficient cash balance (max exposure = orderCount * 100 cents)
+            val maxCostCents = orderCount * 100L
+            if (currentState.balance.balanceCents < maxCostCents) {
+                appendLog("Insufficient balance (${currentState.balance.balanceDollars} USD < required ${maxCostCents / 100.0} USD). Failing closed.")
+                _state.value = _state.value.copy(error = "Insufficient Kalshi balance")
+                return
             }
 
             val clientOrderId = "qty_${activeMarket.ticker}_${timestamp}_${UUID.randomUUID().toString().take(6)}"
@@ -248,6 +308,21 @@ class KalshiAutomationEngine(
             // Submit order via official Kalshi API client
             val result = apiClient.submitOrder(orderRequest)
             result.onSuccess { response ->
+                // Execution State Safety: Validate order response state
+                val validStatuses = setOf("resting", "filled", "executed", "canceled", "rejected", "pending")
+                if (!validStatuses.contains(response.status.lowercase())) {
+                    appendLog("Unknown order state '${response.status}' received from Kalshi API. Failing closed.")
+                    _state.value = _state.value.copy(error = "Unknown order state: ${response.status}")
+                    return@onSuccess
+                }
+
+                // Execution State Safety: Validate fill count bounds
+                if (response.filledCount < 0 || response.filledCount > response.count) {
+                    appendLog("Unknown fill count: ${response.filledCount} out of ${response.count}. Failing closed.")
+                    _state.value = _state.value.copy(error = "Unknown fill count: ${response.filledCount}")
+                    return@onSuccess
+                }
+
                 val updatedOrders = (listOf(response) + currentState.recentOrders).take(20)
                 val fillStatus = when {
                     response.status.equals("rejected", ignoreCase = true) -> "REJECTED"
@@ -301,8 +376,8 @@ class KalshiAutomationEngine(
             return ValidationResult(false, "Unrecognized series ticker: ${market.seriesTicker}")
         }
 
-        if (!market.status.equals("active", ignoreCase = true)) {
-            return ValidationResult(false, "Market status is ${market.status}, not active")
+        if (!market.status.equals("active", ignoreCase = true) && !market.status.equals("open", ignoreCase = true)) {
+            return ValidationResult(false, "Market status is ${market.status}, not active/open")
         }
 
         if (market.closeTimeMs <= nowMs) {
@@ -412,6 +487,22 @@ class KalshiAutomationEngine(
             balance = balance,
             activePositions = positions,
             latestOrderBook = orderBook
+        )
+    }
+
+    fun setStateForTesting(
+        isAuthenticated: Boolean? = null,
+        activeContract: KalshiMarket? = null,
+        balance: KalshiBalance? = null,
+        activePositions: List<KalshiPosition>? = null,
+        latestOrderBook: KalshiOrderBookSnapshot? = null
+    ) {
+        _state.value = _state.value.copy(
+            isAuthenticated = isAuthenticated ?: _state.value.isAuthenticated,
+            activeContract = activeContract ?: _state.value.activeContract,
+            balance = balance ?: _state.value.balance,
+            activePositions = activePositions ?: _state.value.activePositions,
+            latestOrderBook = latestOrderBook ?: _state.value.latestOrderBook
         )
     }
 

@@ -18,7 +18,14 @@ data class EngineCycleEntity(
     val totalTicks: Long
 )
 
-@Entity(tableName = "predictions")
+@Entity(
+    tableName = "predictions",
+    indices = [
+        androidx.room.Index(value = ["timestamp"]),
+        androidx.room.Index(value = ["maturityTimestamp"]),
+        androidx.room.Index(value = ["result"])
+    ]
+)
 data class PredictionEntity(
     @PrimaryKey val predictionId: String,
     val timestamp: Long,
@@ -32,6 +39,7 @@ data class PredictionEntity(
     val actualPrice: Double?,
     val result: String?,
     val calibratedScore: Double? = null,
+    // IndicatorSnapshot fields
     val ema9: Double,
     val ema21: Double,
     val rsi: Double,
@@ -39,9 +47,35 @@ data class PredictionEntity(
     val velocity: Double,
     val acceleration: Double,
     val volatility: Double,
+    val volume: Double = 0.0,
     val volumeChange: Double,
     val buffer: Double,
-    val formulaDisplay: String
+    val bidAskSpread: Double = 0.0,
+    val exchangeAgreement: String = "STRONG_AGREEMENT",
+    val formulaDisplay: String,
+    // Settlement methodology & reference
+    val settlementReference: Double = 0.0,
+    val settlementMethodology: String = "15M_ROLLING_WINDOW",
+    // 90s projection fields
+    val projectedPrice90s: Double = 0.0,
+    val projectedDecision90s: String = "NO-TRADE",
+    val maturityTimestamp90s: Long = 0L,
+    val actualPrice90s: Double? = null,
+    val result90s: String? = null,
+    // Dedicated 30s fields
+    val actualPrice30s: Double? = null,
+    val result30s: String? = null,
+    // Source & market timestamps
+    val sourceExchange: String = "CONSOLIDATED_USD",
+    val marketTimestamp: Long = 0L,
+    // Kalshi contract & execution lineage
+    val kalshiContractTicker: String? = null,
+    val strikePrice: Double? = null,
+    val kalshiOrderId: String? = null,
+    val kalshiOrderStatus: String? = null,
+    val kalshiFilledCount: Int? = null,
+    val kalshiOrderPrice: Int? = null,
+    val executionPrice: Double? = null
 )
 
 @Entity(tableName = "backtest_records")
