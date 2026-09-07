@@ -617,14 +617,15 @@ class BtcDataFeed(
     }
 
     /**
-     * Fetches recent 15-minute 1m kline candles from Binance (with Coinbase fallback)
-     * for authentic historical market charting on startup.
+     * Fetches recent 1m kline candles from Binance (with Coinbase fallback)
+     * for authentic historical market charting on startup or replay backtesting.
      */
-    suspend fun fetchRecent15mCandles(): List<PricePoint> = withContext(Dispatchers.IO) {
+    suspend fun fetchRecentCandles(limit: Int = 150): List<PricePoint> = withContext(Dispatchers.IO) {
         val points = mutableListOf<PricePoint>()
-        // 1. Try Binance 1m klines (15 minutes)
+        val boundedLimit = limit.coerceIn(15, 500)
+        // 1. Try Binance 1m klines
         try {
-            val url = "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=15"
+            val url = "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=$boundedLimit"
             val req = Request.Builder().url(url).build()
             client.newCall(req).execute().use { resp ->
                 if (resp.isSuccessful) {
@@ -651,7 +652,7 @@ class BtcDataFeed(
                 }
             }
         } catch (e: Exception) {
-            SafeLog.w(TAG, "Binance 15m candle fetch error: ${e.message}")
+            SafeLog.w(TAG, "Binance candle fetch error: ${e.message}")
         }
 
         if (points.isNotEmpty()) {
@@ -667,7 +668,7 @@ class BtcDataFeed(
                     val body = resp.body?.string()
                     if (!body.isNullOrBlank()) {
                         val array = org.json.JSONArray(body)
-                        val count = minOf(array.length(), 15)
+                        val count = minOf(array.length(), boundedLimit)
                         for (i in (count - 1) downTo 0) {
                             val candle = array.getJSONArray(i)
                             val epochSec = candle.getLong(0)
@@ -688,11 +689,17 @@ class BtcDataFeed(
                 }
             }
         } catch (e: Exception) {
-            SafeLog.w(TAG, "Coinbase 15m candle fallback error: ${e.message}")
+            SafeLog.w(TAG, "Coinbase candle fallback error: ${e.message}")
         }
 
         points
     }
+
+    /**
+     * Fetches recent 15-minute 1m kline candles from Binance (with Coinbase fallback)
+     * for authentic historical market charting on startup.
+     */
+    suspend fun fetchRecent15mCandles(): List<PricePoint> = fetchRecentCandles(15)
 
     /**
      * Retrieves all recently cached spot PricePoints for consolidation.

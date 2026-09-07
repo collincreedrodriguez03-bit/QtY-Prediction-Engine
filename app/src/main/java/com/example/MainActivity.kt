@@ -321,13 +321,13 @@ fun HeaderBar(
 }
 
 /**
- * Tab 0: MAIN / PREDICTION
- * Centered around:
- * 1. 30s Scalp Prediction Banner & Target
- * 2. 15-Minute Real BTC Market-Price Graph (Historical/Live Spot only - NO predictions)
- * 3. 30-Second Dynamic BTC Prediction Graph (Live Spot Price, Exact Time, 30s Target & Timer)
- * 4. Connected Spot APIs Table (Real validated multi-exchange feeds)
- * 5. Real Measured Live Scalp Accuracy Card
+ * MAIN SCREEN: Primary QtY Trading-Visualization Workspace.
+ *
+ * Visually communicates:
+ * REAL BTC PRICE -> CURRENT MARKET STRUCTURE -> MODEL FORECAST -> IMPORTANT LEVELS -> EXPECTED PATH -> OUTCOME
+ *
+ * The chart is the primary visual workspace.
+ * Developer telemetry, exchange/API details, and diagnostics reside in Engine Room.
  */
 @Composable
 fun MainPredictionTab(engineState: EngineState) {
@@ -337,19 +337,11 @@ fun MainPredictionTab(engineState: EngineState) {
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // 1. Clean 15-Minute Real BTC Market-Price Graph (Historical & Live Real Data Only)
         item {
-            Btc15MinMarketChart(engineState = engineState)
-        }
-
-        // 2. Focused Live 30-Second BTC Prediction Graph (Current Spot & Time on Left, Projected Price & Timer on Right)
-        item {
-            BtcLivePredictionChart(engineState = engineState)
-        }
-
-        // 3. Measured Live Scalp Performance & Statistical Evaluation Card
-        item {
-            LivePerformanceCard(stats = engineState.performanceStats)
+            BtcLivePredictionChart(
+                engineState = engineState,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }

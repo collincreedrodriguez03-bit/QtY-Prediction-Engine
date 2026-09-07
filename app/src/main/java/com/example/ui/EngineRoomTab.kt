@@ -87,6 +87,16 @@ fun EngineRoomTab(
         item {
             AdaptiveCalibrationCard(engineState = engineState)
         }
+
+        // 6. Kalshi Order-Book Verification (Independent Confirmation Telemetry)
+        item {
+            KalshiOrderBookVerificationCard(engineState = engineState)
+        }
+
+        // 7. 15-Minute Spot Market Price Context
+        item {
+            Btc15MinMarketChart(engineState = engineState)
+        }
     }
 }
 
@@ -612,3 +622,70 @@ fun AdaptiveCalibrationCard(engineState: EngineState) {
         }
     }
 }
+
+/**
+ * Order-Book Verification Telemetry Card.
+ * Relocated to Engine Room so Main screen remains pristine and chart-focused.
+ */
+@Composable
+fun KalshiOrderBookVerificationCard(engineState: EngineState) {
+    val verif = engineState.kalshiVerification
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0C1322)),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(12.dp))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "KALSHI ORDER-BOOK VERIFICATION",
+                    color = Color(0xFF64748B),
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp
+                )
+                val statusColor = when (verif?.verificationSummary) {
+                    "FULL_AGREEMENT" -> Color(0xFF00E676)
+                    "PARTIAL_AGREEMENT" -> Color(0xFF00E5FF)
+                    "DIVERGENCE" -> Color(0xFFFF5252)
+                    "NEUTRAL" -> Color(0xFFFFD600)
+                    else -> Color(0xFF94A3B8)
+                }
+                Text(
+                    text = verif?.verificationSummary ?: "AWAITING TICK",
+                    color = statusColor,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Black
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            val midText = verif?.yesMidPriceCents?.let { String.format(Locale.US, "%.0f¢", it) }
+                ?: verif?.marketPriceCents?.let { "${it}¢" }
+                ?: "N/A"
+            Text(
+                text = "Bias: ${verif?.marketBias ?: "NEUTRAL"} ($midText) • Agreement 30s: ${verif?.agreement30s ?: "N/A"}",
+                color = Color(0xFF94A3B8),
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace
+            )
+            if (engineState.kalshiContractTicker != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Contract Ticker: ${engineState.kalshiContractTicker}",
+                    color = Color(0xFF64748B),
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+    }
+}
+

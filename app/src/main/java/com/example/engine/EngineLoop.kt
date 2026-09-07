@@ -43,6 +43,7 @@ data class EngineState(
     val latestPrediction: PredictionRecord? = null,
     val recentPredictions: List<PredictionRecord> = emptyList(),
     val recentPrices: List<Double> = emptyList(),
+    val recentPoints: List<com.example.data.PricePoint> = emptyList(),
     val errorLog: String? = null,
     val mathDisplay: String = "INITIALIZING...",
     val totalRecordedPredictions: Int = 0,
@@ -100,6 +101,7 @@ class EngineLoop(
                     priceHistory.addAll(historicalCandles)
                     _state.value = _state.value.copy(
                         recentPrices = priceHistory.getPrices(),
+                        recentPoints = priceHistory.getAll(),
                         latestPrice = historicalCandles.last().price
                     )
                 }
@@ -329,7 +331,8 @@ class EngineLoop(
 
         // 7. [EMIT IMMUTABLE STATE]
         val recent = logger.getRecentPredictions(10)
-        val allHistoryPrices = priceHistory.getAll().map { it.price }
+        val allHistoryPoints = priceHistory.getAll()
+        val allHistoryPrices = allHistoryPoints.map { it.price }
         val kalState = kalshiAutomation?.state?.value
 
         _state.value = EngineState(
@@ -348,6 +351,7 @@ class EngineLoop(
             latestPrediction = prediction,
             recentPredictions = recent,
             recentPrices = allHistoryPrices,
+            recentPoints = allHistoryPoints,
             errorLog = null,
             mathDisplay = if (comparison.agreementStatus == com.example.data.ExchangeAgreementStatus.DISAGREEMENT) {
                 "FEEDS CONFLICTED (>0.5% divergence) -> FAILING CLOSED TO NO-TRADE"

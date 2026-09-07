@@ -164,7 +164,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val replayData = if (realHistory.size >= 40) {
                     realHistory
                 } else {
-                    val candles = dataFeed.fetchRecent15mCandles()
+                    val candles = dataFeed.fetchRecentCandles(sampleCount)
                     if (candles.size >= 40) {
                         candles
                     } else {

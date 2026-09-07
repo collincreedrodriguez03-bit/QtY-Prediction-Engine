@@ -314,6 +314,8 @@ class ExecutionSafetyTest {
 
         val market = createValidMarket(now)
         val book = createValidBook(now, market.ticker)
+        mockClient.activeContractsResult = Result.success(listOf(market))
+        mockClient.orderBookResult = { Result.success(book) }
 
         engine.setStateForTesting(
             activeContract = market,

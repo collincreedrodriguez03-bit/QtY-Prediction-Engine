@@ -9,6 +9,7 @@ data class BacktestResult(
     val statisticalTotalTrades: Int = 0,
     val statisticalCorrect: Int = 0,
     val statisticalIncorrect: Int = 0,
+    val statisticalTies: Int = 0,
     val statisticalWinRatePercent: Double = 0.0,
     val statisticalUpCount: Int = 0,
     val statisticalDownCount: Int = 0,
@@ -22,6 +23,7 @@ data class BacktestResult(
     val operationalTotalTrades: Int = 0,
     val operationalCorrect: Int = 0,
     val operationalIncorrect: Int = 0,
+    val operationalTies: Int = 0,
     val operationalWinRatePercent: Double = 0.0,
 
     // Backward-compatible fields for existing UI bindings
@@ -31,18 +33,21 @@ data class BacktestResult(
     val noTrades: Int = statisticalNoTradeCount,
     val correctPredictions: Int = statisticalCorrect,
     val incorrectPredictions: Int = statisticalIncorrect,
+    val ties: Int = statisticalTies,
     val winRatePercent: Double = statisticalWinRatePercent,
     val baselineAlwaysUpWinRate: Double = activeBaselineAlwaysUpWinRate,
     val baselineAlwaysDownWinRate: Double = activeBaselineAlwaysDownWinRate,
-    val samplePredictions: List<PredictionRecord> = emptyList()
+    val samplePredictions: List<PredictionRecord> = emptyList(),
+    val horizonStats: Map<Int, HorizonPerformanceStats> = emptyMap()
 )
 
 /**
  * Historical replay backtesting engine for Phase 1.
- * Chronologically feeds historical data through IndicatorCalculator and PredictionEngine.
+ * Chronologically feeds authentic historical data through IndicatorCalculator and PredictionEngine.
  * Computes:
  * 1. Formal Statistical Evaluation using 15-step (30-second) non-overlapping evaluation windows.
  * 2. Operational Replay using continuous 1-step evaluation.
+ * 3. Independent multi-horizon resolution across all supported timeframes without lookahead bias.
  */
 class Backtester(
     private val indicatorCalculator: IndicatorCalculator = IndicatorCalculator(),
@@ -50,16 +55,24 @@ class Backtester(
 ) {
 
     /**
-     * Replays a list of sequential chronological PricePoints (at ~2s intervals)
-     * and evaluates prediction accuracy against actual 30-second forward prices.
+     * Replays a list of sequential chronological PricePoints (at ~2s intervals or 1m candles)
+     * and evaluates prediction accuracy against actual forward prices.
+     * Enforces zero future lookahead: settlement reference and indicator state only observe
+     * data up to the current timestamp.
      */
     fun runBacktest(prices: List<PricePoint>): BacktestResult {
-        if (prices.size < 40) {
+        // 1. Authenticate data and filter non-positive/malformed points
+        val validPrices = prices.filter {
+            it.price > 0.0 && !it.price.isNaN() && !it.price.isInfinite() && it.timestamp > 0L
+        }.sortedBy { it.timestamp }
+
+        if (validPrices.size < 40) {
             return BacktestResult(
-                totalSamples = prices.size,
+                totalSamples = validPrices.size,
                 statisticalTotalTrades = 0,
                 statisticalCorrect = 0,
                 statisticalIncorrect = 0,
+                statisticalTies = 0,
                 statisticalWinRatePercent = 0.0,
                 statisticalUpCount = 0,
                 statisticalDownCount = 0,
@@ -71,8 +84,10 @@ class Backtester(
                 operationalTotalTrades = 0,
                 operationalCorrect = 0,
                 operationalIncorrect = 0,
+                operationalTies = 0,
                 operationalWinRatePercent = 0.0,
-                samplePredictions = emptyList()
+                samplePredictions = emptyList(),
+                horizonStats = emptyMap()
             )
         }
 
@@ -86,6 +101,7 @@ class Backtester(
         var opNoTradeCount = 0
         var opCorrectCount = 0
         var opIncorrectCount = 0
+        var opTieCount = 0
 
         // Statistical Non-Overlapping 15-step Stream Accumulators
         var statUpCount = 0
@@ -93,6 +109,7 @@ class Backtester(
         var statNoTradeCount = 0
         var statCorrectCount = 0
         var statIncorrectCount = 0
+        var statTieCount = 0
 
         var statActiveBaseUpWins = 0
         var statActiveBaseDownWins = 0
@@ -102,12 +119,17 @@ class Backtester(
         var statGlobalBaseDownWins = 0
         var statGlobalBaseTotal = 0
 
-        var lastStatisticalIndex = -horizonSteps // Ensure first eligible sample starts immediately after warmup
+        var lastStatisticalIndex = -horizonSteps // First eligible sample starts immediately after warmup
 
         val predictionList = mutableListOf<PredictionRecord>()
 
-        for (i in prices.indices) {
-            val point = prices[i]
+        // Horizon-specific evaluation accumulators: horizonSeconds -> HorizonAccumulator
+        val horizonAccumulators = PredictionHorizon.ALL_HORIZONS.associate { h ->
+            h.seconds to HorizonAccumulator(h.seconds)
+        }.toMutableMap()
+
+        for (i in validPrices.indices) {
+            val point = validPrices[i]
             rollingPoints.add(point)
             if (rollingPoints.size > 300) {
                 rollingPoints.removeAt(0)
@@ -123,9 +145,10 @@ class Backtester(
             )
             previousVelocity = snapshot.velocity
 
+            // Strict zero lookahead: settlement reference derives strictly from past rolling observations
             val windowMs = 15 * 60 * 1000L
             val intervalStart = point.timestamp - (point.timestamp % windowMs)
-            val settlementRef = prices.minByOrNull { kotlin.math.abs(it.timestamp - intervalStart) }?.price ?: point.price
+            val settlementRef = rollingPoints.minByOrNull { kotlin.math.abs(it.timestamp - intervalStart) }?.price ?: point.price
 
             val prediction = predictionEngine.predict(
                 currentPrice = point.price,
@@ -134,11 +157,12 @@ class Backtester(
                 settlementReference = settlementRef
             )
 
-            // Look forward 30 seconds (15 steps) if available
+            // Look forward 30 seconds (15 steps) for primary baseline evaluation
             val futureIndex = i + horizonSteps
-            if (futureIndex < prices.size) {
-                val futurePrice = prices[futureIndex].price
+            if (futureIndex < validPrices.size) {
+                val futurePrice = validPrices[futureIndex].price
                 prediction.actualPrice = futurePrice
+                prediction.actualPrice30s = futurePrice
 
                 val contractDelta = futurePrice - prediction.settlementReference
 
@@ -146,27 +170,48 @@ class Backtester(
                 when (prediction.decision) {
                     "UP" -> {
                         opUpCount++
-                        if (contractDelta > 0.0) {
-                            prediction.result = "CORRECT"
-                            opCorrectCount++
-                        } else {
-                            prediction.result = "INCORRECT"
-                            opIncorrectCount++
+                        when {
+                            contractDelta > 0.0 -> {
+                                prediction.result = "CORRECT"
+                                prediction.result30s = "CORRECT"
+                                opCorrectCount++
+                            }
+                            contractDelta < 0.0 -> {
+                                prediction.result = "INCORRECT"
+                                prediction.result30s = "INCORRECT"
+                                opIncorrectCount++
+                            }
+                            else -> {
+                                prediction.result = "TIE"
+                                prediction.result30s = "TIE"
+                                opTieCount++
+                            }
                         }
                     }
                     "DOWN" -> {
                         opDownCount++
-                        if (contractDelta < 0.0) {
-                            prediction.result = "CORRECT"
-                            opCorrectCount++
-                        } else {
-                            prediction.result = "INCORRECT"
-                            opIncorrectCount++
+                        when {
+                            contractDelta < 0.0 -> {
+                                prediction.result = "CORRECT"
+                                prediction.result30s = "CORRECT"
+                                opCorrectCount++
+                            }
+                            contractDelta > 0.0 -> {
+                                prediction.result = "INCORRECT"
+                                prediction.result30s = "INCORRECT"
+                                opIncorrectCount++
+                            }
+                            else -> {
+                                prediction.result = "TIE"
+                                prediction.result30s = "TIE"
+                                opTieCount++
+                            }
                         }
                     }
                     else -> {
                         opNoTradeCount++
                         prediction.result = "NO-TRADE"
+                        prediction.result30s = "NO-TRADE"
                     }
                 }
 
@@ -181,28 +226,102 @@ class Backtester(
                         "UP" -> {
                             statUpCount++
                             statActiveBaseTotal++
-                            if (contractDelta > 0.0) {
-                                statCorrectCount++
-                                statActiveBaseUpWins++
-                            } else {
-                                statIncorrectCount++
-                                if (contractDelta < 0.0) statActiveBaseDownWins++
+                            when {
+                                contractDelta > 0.0 -> {
+                                    statCorrectCount++
+                                    statActiveBaseUpWins++
+                                }
+                                contractDelta < 0.0 -> {
+                                    statIncorrectCount++
+                                    statActiveBaseDownWins++
+                                }
+                                else -> {
+                                    statTieCount++
+                                }
                             }
                         }
                         "DOWN" -> {
                             statDownCount++
                             statActiveBaseTotal++
-                            if (contractDelta < 0.0) {
-                                statCorrectCount++
-                                statActiveBaseDownWins++
-                            } else {
-                                statIncorrectCount++
-                                if (contractDelta > 0.0) statActiveBaseUpWins++
+                            when {
+                                contractDelta < 0.0 -> {
+                                    statCorrectCount++
+                                    statActiveBaseDownWins++
+                                }
+                                contractDelta > 0.0 -> {
+                                    statIncorrectCount++
+                                    statActiveBaseUpWins++
+                                }
+                                else -> {
+                                    statTieCount++
+                                }
                             }
                         }
                         else -> {
                             statNoTradeCount++
                         }
+                    }
+                }
+            }
+
+            // 90-second resolution if forward observations exist
+            val futureIndex90s = i + 45
+            if (futureIndex90s < validPrices.size) {
+                val futurePrice90s = validPrices[futureIndex90s].price
+                prediction.actualPrice90s = futurePrice90s
+                val delta90s = futurePrice90s - prediction.settlementReference
+                prediction.result90s = when (prediction.projectedDecision90s) {
+                    "UP" -> when {
+                        delta90s > 0.0 -> "CORRECT"
+                        delta90s < 0.0 -> "INCORRECT"
+                        else -> "TIE"
+                    }
+                    "DOWN" -> when {
+                        delta90s < 0.0 -> "CORRECT"
+                        delta90s > 0.0 -> "INCORRECT"
+                        else -> "TIE"
+                    }
+                    else -> "NO-TRADE"
+                }
+            }
+
+            // Resolve each supported horizon independently
+            for (forecast in prediction.horizonForecasts) {
+                val hSec = forecast.horizonSeconds
+                val hSteps = maxOf(1, hSec / 2)
+                val hIdx = i + hSteps
+                val accum = horizonAccumulators[hSec]
+                if (accum != null) {
+                    accum.totalForecasts++
+                    if (hIdx < validPrices.size) {
+                        val hFuturePrice = validPrices[hIdx].price
+                        forecast.actualPrice = hFuturePrice
+                        forecast.resolvedTimestamp = validPrices[hIdx].timestamp
+                        val hDelta = hFuturePrice - forecast.settlementReference
+                        val hResult = when (forecast.decision) {
+                            "UP" -> when {
+                                hDelta > 0.0 -> "CORRECT"
+                                hDelta < 0.0 -> "INCORRECT"
+                                else -> "TIE"
+                            }
+                            "DOWN" -> when {
+                                hDelta < 0.0 -> "CORRECT"
+                                hDelta > 0.0 -> "INCORRECT"
+                                else -> "TIE"
+                            }
+                            else -> "NO-TRADE"
+                        }
+                        forecast.result = hResult
+                        accum.resolvedCount++
+                        when (hResult) {
+                            "CORRECT" -> accum.correctCount++
+                            "INCORRECT" -> accum.incorrectCount++
+                            "TIE" -> accum.tieCount++
+                            else -> {}
+                        }
+                    } else {
+                        forecast.result = "UNRESOLVED"
+                        accum.unresolvedCount++
                     }
                 }
             }
@@ -222,11 +341,28 @@ class Backtester(
         val globalBaseUpRate = if (statGlobalBaseTotal > 0) (statGlobalBaseUpWins.toDouble() / statGlobalBaseTotal) * 100.0 else 50.0
         val globalBaseDownRate = if (statGlobalBaseTotal > 0) (statGlobalBaseDownWins.toDouble() / statGlobalBaseTotal) * 100.0 else 50.0
 
+        val computedHorizonStats = horizonAccumulators.mapValues { (_, accum) ->
+            val decisive = accum.correctCount + accum.incorrectCount
+            val winRate = if (decisive > 0) {
+                Math.round((accum.correctCount.toDouble() / decisive) * 1000.0) / 10.0
+            } else 0.0
+            HorizonPerformanceStats(
+                horizonSeconds = accum.horizonSeconds,
+                totalForecasts = accum.totalForecasts,
+                resolvedCount = accum.resolvedCount,
+                correctCount = accum.correctCount,
+                incorrectCount = accum.incorrectCount,
+                unresolvedCount = accum.unresolvedCount,
+                winRate = winRate
+            )
+        }
+
         return BacktestResult(
-            totalSamples = prices.size,
+            totalSamples = validPrices.size,
             statisticalTotalTrades = statTotalTrades,
             statisticalCorrect = statCorrectCount,
             statisticalIncorrect = statIncorrectCount,
+            statisticalTies = statTieCount,
             statisticalWinRatePercent = Math.round(statWinRate * 10.0) / 10.0,
             statisticalUpCount = statUpCount,
             statisticalDownCount = statDownCount,
@@ -238,8 +374,20 @@ class Backtester(
             operationalTotalTrades = opTotalTrades,
             operationalCorrect = opCorrectCount,
             operationalIncorrect = opIncorrectCount,
+            operationalTies = opTieCount,
             operationalWinRatePercent = Math.round(opWinRate * 10.0) / 10.0,
-            samplePredictions = predictionList.takeLast(10)
+            samplePredictions = predictionList.takeLast(15),
+            horizonStats = computedHorizonStats
         )
     }
+
+    private class HorizonAccumulator(val horizonSeconds: Int) {
+        var totalForecasts: Int = 0
+        var resolvedCount: Int = 0
+        var correctCount: Int = 0
+        var incorrectCount: Int = 0
+        var tieCount: Int = 0
+        var unresolvedCount: Int = 0
+    }
 }
+

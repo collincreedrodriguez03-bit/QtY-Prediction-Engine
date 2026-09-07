@@ -388,6 +388,9 @@ class KalshiOrderLifecycleAndRiskTest {
 
         val market = createMarket(now, "KXBTC15M-260905-2100")
         val book = createBook(now, market.ticker)
+        mockApiClient.activeContractsResult = Result.success(listOf(market))
+        mockApiClient.orderBookResult = { Result.success(book) }
+        mockApiClient.balanceResult = Result.success(KalshiBalance(balanceCents = 10L))
         engine.setStateForTesting(
             isAuthenticated = true,
             activeContract = market,
