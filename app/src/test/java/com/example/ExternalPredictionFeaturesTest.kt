@@ -608,4 +608,216 @@ class ExternalPredictionFeaturesTest {
         assertEquals(recWithout.projectedDecision90s, recWith.projectedDecision90s)
         assertEquals(recWithout.inputs.formulaDisplay, recWith.inputs.formulaDisplay)
     }
+
+    // ==========================================
+    // EXTERNAL RESEARCH DATA INTEGRITY AUDIT TESTS
+    // ==========================================
+
+    @Test
+    fun testExternalFeatureCoordinatorRefreshLiveApisCallerAndNonBlocking() = runBlocking {
+        val cq = CryptoQuantWhaleMomentumFeature(mockClient, "https://mock.cryptoquant.com")
+        val gn = GlassnodeEntityFlowFeature(mockClient, "https://mock.glassnode.com")
+        val cg = CoinGlassLiquidationRiskFeature(mockClient, "https://mock.coinglass.com")
+        cq.setApiKey("test-cq-key")
+        gn.setApiKey("test-gn-key")
+        cg.setApiKey("test-cg-key")
+
+        mockResponseCode = 200
+        mockResponseBody = """{"data": [{"time": 1700000000, "buyVolUsd": 150000.0, "sellVolUsd": 250000.0}]}"""
+
+        val coordinator = ExternalFeatureCoordinator(
+            cryptoQuantFeature = cq,
+            glassnodeFeature = gn,
+            coinGlassFeature = cg
+        )
+
+        // Verify refreshLiveApis returns a real Job and executes non-blocking
+        val job = coordinator.refreshLiveApis(System.currentTimeMillis())
+        assertNotNull("refreshLiveApis must return a real executable Job", job)
+        job.join()
+
+        // Verify that coordinator tracked the refresh execution
+        assertTrue("lastRefreshTimestampMs must be updated after refresh", coordinator.lastRefreshTimestampMs > 0L)
+        assertFalse("isRefreshing must return to false upon completion", coordinator.isRefreshing.value)
+
+        // Verify EngineLoop has a real caller for triggering refresh
+        val engineLoop = com.example.engine.EngineLoop(
+            externalFeatureCoordinator = coordinator
+        )
+        val loopJob = engineLoop.triggerExternalApiRefresh(System.currentTimeMillis())
+        assertNotNull("EngineLoop must provide a real caller for triggerExternalApiRefresh", loopJob)
+        loopJob.join()
+    }
+
+    @Test
+    fun testCoinGlassAuthenticDirectionalDataVsFabricatedSplit() {
+        val cg = CoinGlassLiquidationRiskFeature(mockClient, "https://mock.coinglass.com")
+        val now = 1_700_000_000_000L
+
+        // Case A: Authentic directional split available
+        val authenticObs = listOf(
+            CoinGlassLiquidationRiskFeature.RawCoinGlassObservation(
+                timestampMs = now - 5000L,
+                longLiquidationUsd = 800_000.0,
+                shortLiquidationUsd = 200_000.0,
+                totalLiquidationUsd = 1_000_000.0,
+                hasAuthenticDirectionalSplit = true
+            )
+        )
+        val resA = cg.calculateFromObservations(authenticObs, now)
+        assertTrue(resA.riskFeature.isAvailable)
+        assertNotNull(resA.riskFeature.normalizedValue)
+        assertTrue(resA.directionFeature.isAvailable)
+        assertNotNull(resA.directionFeature.normalizedValue)
+        // (short 200k - long 800k) / 1000k = -0.6 (bearish long liquidation cascade)
+        assertEquals(-0.6, resA.directionFeature.normalizedValue!!, 0.05)
+
+        // Case B: Directional split NOT available (only total liquidation volume is known)
+        // Fabricated 50/50 split is strictly forbidden! Direction MUST remain unavailable (null).
+        val noDirectionObs = listOf(
+            CoinGlassLiquidationRiskFeature.RawCoinGlassObservation(
+                timestampMs = now - 5000L,
+                longLiquidationUsd = null,
+                shortLiquidationUsd = null,
+                totalLiquidationUsd = 1_000_000.0,
+                hasAuthenticDirectionalSplit = false
+            )
+        )
+        val resB = cg.calculateFromObservations(noDirectionObs, now)
+        assertTrue("Risk intensity is available from total volume", resB.riskFeature.isAvailable)
+        assertNotNull(resB.riskFeature.normalizedValue)
+        assertFalse("Direction must be UNAVAILABLE when directional split is missing", resB.directionFeature.isAvailable)
+        assertNull("Direction normalizedValue must be NULL, never fabricated 50/50 or 0.0", resB.directionFeature.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.UNAVAILABLE, resB.directionFeature.provenance.provenanceStatus)
+    }
+
+    @Test
+    fun testStaleAndFutureDataRejectionAcrossAllFeatures() {
+        val now = 1_700_000_000_000L
+
+        // 1. TradingView future & stale
+        val tv = TradingViewTrendFeature()
+        val futurePricePoint = (0..20).map { i ->
+            PricePoint(price = 90_000.0 + i, timestamp = now + 50_000L + (i * 2000L), exchange = "BINANCE")
+        }
+        val tvFuture = tv.calculate(futurePricePoint, now)
+        assertFalse(tvFuture.isAvailable)
+        assertNull(tvFuture.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.FUTURE_DATED, tvFuture.provenance.provenanceStatus)
+
+        val stalePricePoint = (0..20).map { i ->
+            PricePoint(price = 90_000.0 + i, timestamp = now - 500_000L + (i * 2000L), exchange = "BINANCE")
+        }
+        val tvStale = tv.calculate(stalePricePoint, now)
+        assertFalse(tvStale.isAvailable)
+        assertNull(tvStale.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.STALE_DATA, tvStale.provenance.provenanceStatus)
+
+        // 2. CryptoQuant future & stale
+        val cq = CryptoQuantWhaleMomentumFeature()
+        val cqFuture = cq.calculateFromObservations(
+            listOf(CryptoQuantWhaleMomentumFeature.RawCryptoQuantObservation(now + 60_000L, 0.85, 100.0, 50.0)),
+            now
+        )
+        assertFalse(cqFuture.isAvailable)
+        assertNull(cqFuture.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.FUTURE_DATED, cqFuture.provenance.provenanceStatus)
+
+        val cqStale = cq.calculateFromObservations(
+            listOf(CryptoQuantWhaleMomentumFeature.RawCryptoQuantObservation(now - 7_200_000L, 0.85, 100.0, 50.0)),
+            now
+        )
+        assertFalse(cqStale.isAvailable)
+        assertNull(cqStale.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.STALE_DATA, cqStale.provenance.provenanceStatus)
+
+        // 3. Glassnode future & stale
+        val gn = GlassnodeEntityFlowFeature()
+        val gnFuture = gn.calculateFromObservations(
+            listOf(GlassnodeEntityFlowFeature.RawGlassnodeObservation(now + 60_000L, 150.0)),
+            now
+        )
+        assertFalse(gnFuture.isAvailable)
+        assertNull(gnFuture.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.FUTURE_DATED, gnFuture.provenance.provenanceStatus)
+
+        val gnStale = gn.calculateFromObservations(
+            listOf(GlassnodeEntityFlowFeature.RawGlassnodeObservation(now - 7_200_000L, 150.0)),
+            now
+        )
+        assertFalse(gnStale.isAvailable)
+        assertNull(gnStale.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.STALE_DATA, gnStale.provenance.provenanceStatus)
+
+        // 4. CoinGlass future & stale
+        val cg = CoinGlassLiquidationRiskFeature()
+        val cgFuture = cg.calculateFromObservations(
+            listOf(CoinGlassLiquidationRiskFeature.RawCoinGlassObservation(now + 60_000L, 100_000.0, 100_000.0)),
+            now
+        )
+        assertFalse(cgFuture.riskFeature.isAvailable)
+        assertNull(cgFuture.riskFeature.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.FUTURE_DATED, cgFuture.riskFeature.provenance.provenanceStatus)
+
+        val cgStale = cg.calculateFromObservations(
+            listOf(CoinGlassLiquidationRiskFeature.RawCoinGlassObservation(now - 7_200_000L, 100_000.0, 100_000.0)),
+            now
+        )
+        assertFalse(cgStale.riskFeature.isAvailable)
+        assertNull(cgStale.riskFeature.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.STALE_DATA, cgStale.riskFeature.provenance.provenanceStatus)
+    }
+
+    @Test
+    fun testMalformedPayloadRejectionNeverSubstitutesZero() {
+        val now = 1_700_000_000_000L
+
+        // CryptoQuant with NaN or out-of-domain whale ratio
+        val cq = CryptoQuantWhaleMomentumFeature()
+        val cqNan = cq.calculateFromObservations(
+            listOf(CryptoQuantWhaleMomentumFeature.RawCryptoQuantObservation(now - 1000L, Double.NaN, 0.0, 0.0)),
+            now
+        )
+        assertFalse(cqNan.isAvailable)
+        assertNull("Must remain null, never 0.0", cqNan.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.MALFORMED_PAYLOAD, cqNan.provenance.provenanceStatus)
+
+        // Glassnode with infinite netFlow
+        val gn = GlassnodeEntityFlowFeature()
+        val gnInf = gn.calculateFromObservations(
+            listOf(GlassnodeEntityFlowFeature.RawGlassnodeObservation(now - 1000L, Double.POSITIVE_INFINITY)),
+            now
+        )
+        assertFalse(gnInf.isAvailable)
+        assertNull("Must remain null, never 0.0", gnInf.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.MALFORMED_PAYLOAD, gnInf.provenance.provenanceStatus)
+
+        // CoinGlass with negative liquidations
+        val cg = CoinGlassLiquidationRiskFeature()
+        val cgNeg = cg.calculateFromObservations(
+            listOf(CoinGlassLiquidationRiskFeature.RawCoinGlassObservation(now - 1000L, -500.0, 100.0)),
+            now
+        )
+        assertFalse(cgNeg.riskFeature.isAvailable)
+        assertNull("Must remain null, never 0.0", cgNeg.riskFeature.normalizedValue)
+        assertEquals(ExternalFeatureProvenanceStatus.MALFORMED_PAYLOAD, cgNeg.riskFeature.provenance.provenanceStatus)
+    }
+
+    @Test
+    fun testProvenanceFieldsCompletenessOnAllObservations() {
+        val now = 1_700_000_000_000L
+        val points = (0..20).map { i ->
+            PricePoint(price = 90_000.0 + i, timestamp = now - 10_000L + (i * 400L), exchange = "BINANCE")
+        }
+
+        val tv = TradingViewTrendFeature()
+        val tvRes = tv.calculate(points, now)
+        assertTrue(tvRes.isAvailable)
+        assertNotNull(tvRes.provenance.source)
+        assertNotNull(tvRes.provenance.metric)
+        assertTrue(tvRes.provenance.sourceTimestampMs > 0L)
+        assertTrue(tvRes.provenance.retrievalTimestampMs >= tvRes.provenance.sourceTimestampMs)
+        assertNotNull(tvRes.provenance.provenanceStatus)
+        assertNotNull(tvRes.provenance.notes)
+    }
 }

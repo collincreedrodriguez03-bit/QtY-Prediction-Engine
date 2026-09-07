@@ -78,7 +78,10 @@ data class PredictionRecord(
     var resolutionTimestamp: Long? = null,
     var resolutionNotes: String? = null,
     // Unified external research features container (Never alters core model weights)
-    val researchExternalFeatures: com.example.engine.external.ExternalPredictionFeatures? = null
+    val researchExternalFeatures: com.example.engine.external.ExternalPredictionFeatures? = null,
+    // Multi-Horizon Research Forecasts (5s, 10s, 30s, 60s, 90s, 120s, 180s, 240s, 300s, 600s, 900s, 1200s)
+    val horizonForecasts: List<HorizonForecast> = emptyList()
 ) {
     val raw_model_score: Double get() = score
+    fun getForecast(horizonSeconds: Int): HorizonForecast? = horizonForecasts.find { it.horizonSeconds == horizonSeconds }
 }

@@ -231,6 +231,15 @@ class PredictionEngine(
 
         val updatedSnapshot = snapshot.copy(formulaDisplay = mathFormula)
 
+        // Generate independent multi-horizon forecasts: 5s, 10s, 30s, 60s, 90s, 120s, 180s, 240s, 300s, 600s, 900s, 1200s
+        val allHorizons = calculateAllHorizons(
+            currentPrice = currentPrice,
+            snapshot = updatedSnapshot,
+            timestamp = timestamp,
+            settlementReference = settlementReference,
+            researchFeatures = researchFeatures
+        )
+
         return PredictionRecord(
             timestamp = timestamp,
             inputs = updatedSnapshot,
@@ -245,8 +254,202 @@ class PredictionEngine(
             calibratedScore = Math.round(calScore.coerceIn(0.0, 1.0) * 1000.0) / 1000.0,
             projectedPrice90s = Math.round(projectedPrice90s * 100.0) / 100.0,
             projectedDecision90s = projectedDecision90s,
+            researchExternalFeatures = researchFeatures,
+            horizonForecasts = allHorizons
+        )
+    }
+
+    /**
+     * Calculates an independent econometric forecast for a given time horizon.
+     * Incorporates timescale-appropriate factor weights, velocity friction decay,
+     * and sublinear volatility diffusion.
+     */
+    fun calculateHorizonForecast(
+        horizonSeconds: Int,
+        currentPrice: Double,
+        snapshot: IndicatorSnapshot,
+        timestamp: Long = System.currentTimeMillis(),
+        settlementReference: Double = currentPrice,
+        researchFeatures: com.example.engine.external.ExternalPredictionFeatures? = null,
+        sourceExchange: String = "CONSOLIDATED_USD",
+        marketTimestamp: Long = timestamp
+    ): HorizonForecast {
+        val emaSignal = normalizeEmaSignal(currentPrice, snapshot.ema9, snapshot.ema21)
+        val rsiSignal = normalizeRsiSignal(snapshot.rsi)
+        val momSignal = normalizeMomentumSignal(snapshot.momentum, currentPrice)
+        val velSignal = normalizeVelocitySignal(snapshot.velocity, currentPrice)
+        val volSignal = normalizeVolatilitySignal(snapshot.volatility, currentPrice, emaSignal)
+        val volumeSignal = normalizeVolumeSignal(snapshot.volumeChange, snapshot.momentum)
+        val bufSignal = normalizeBufferSignal(snapshot.buffer, currentPrice)
+
+        // 1. Independent factor weights tailored to timescale physics
+        val weights = when (horizonSeconds) {
+            5 -> HorizonFactorWeights(0.10, 0.10, 0.25, 0.35, 0.05, 0.10, 0.05)
+            10 -> HorizonFactorWeights(0.15, 0.14, 0.25, 0.25, 0.08, 0.08, 0.05)
+            30 -> HorizonFactorWeights(weightEma, weightRsi, weightMomentum, weightVelocity, weightVol, weightVolume, weightBuffer) // Frozen v1 baseline
+            60 -> HorizonFactorWeights(0.28, 0.22, 0.16, 0.10, 0.10, 0.06, 0.08)
+            90 -> HorizonFactorWeights(0.30, 0.23, 0.13, 0.07, 0.10, 0.06, 0.11)
+            120 -> HorizonFactorWeights(0.32, 0.24, 0.10, 0.05, 0.10, 0.05, 0.14)
+            180 -> HorizonFactorWeights(0.34, 0.24, 0.08, 0.03, 0.11, 0.05, 0.15)
+            240 -> HorizonFactorWeights(0.35, 0.24, 0.06, 0.01, 0.12, 0.05, 0.17)
+            300 -> HorizonFactorWeights(0.36, 0.24, 0.05, 0.00, 0.12, 0.05, 0.18)
+            600 -> HorizonFactorWeights(0.38, 0.20, 0.03, 0.00, 0.12, 0.05, 0.22)
+            900 -> HorizonFactorWeights(0.40, 0.20, 0.00, 0.00, 0.10, 0.05, 0.25)
+            1200 -> HorizonFactorWeights(0.40, 0.19, 0.00, 0.00, 0.10, 0.05, 0.26)
+            else -> HorizonFactorWeights(weightEma, weightRsi, weightMomentum, weightVelocity, weightVol, weightVolume, weightBuffer)
+        }
+        val (wEma, wRsi, wMom, wVel, wVol, wVolume, wBuf) = weights
+
+        val totalW = wEma + wRsi + wMom + wVel + wVol + wVolume + wBuf
+        val normEma = wEma / totalW
+        val normRsi = wRsi / totalW
+        val normMom = wMom / totalW
+        val normVel = wVel / totalW
+        val normVol = wVol / totalW
+        val normVolume = wVolume / totalW
+        val normBuf = wBuf / totalW
+
+        val rawH = (
+            emaSignal * normEma +
+            rsiSignal * normRsi +
+            momSignal * normMom +
+            velSignal * normVel +
+            volSignal * normVol +
+            volumeSignal * normVolume +
+            bufSignal * normBuf
+        )
+
+        val agreementAdj = when (snapshot.exchangeAgreement) {
+            "STRONG_AGREEMENT" -> 0.02
+            "DISAGREEMENT" -> -0.05
+            else -> 0.0
+        }
+
+        val adjustedH = if (rawH >= 0.5) {
+            (rawH + agreementAdj).coerceIn(0.0, 1.0)
+        } else {
+            (rawH - agreementAdj).coerceIn(0.0, 1.0)
+        }
+
+        val decisionH = when {
+            adjustedH >= thresholdUp -> "UP"
+            adjustedH <= thresholdDown -> "DOWN"
+            else -> "NO-TRADE"
+        }
+
+        val strengthH = when {
+            adjustedH >= 0.80 || adjustedH <= 0.20 -> "STRONG"
+            adjustedH >= 0.70 || adjustedH <= 0.30 -> "MEDIUM"
+            else -> "WEAK"
+        }
+
+        // 2. Independent timescale price projection (Not merely stretching 30s)
+        val predPriceH = when {
+            horizonSeconds == 30 -> {
+                // Exact primary 30s formula
+                val expectedMoveRatio = (adjustedH - 0.5) * 0.0015 * (30.0 / 60.0)
+                currentPrice * (1.0 + expectedMoveRatio)
+            }
+            horizonSeconds <= 10 -> {
+                // Micro-horizons: direct velocity impulse + micro drift
+                val velocityImpulse = snapshot.velocity * horizonSeconds * 0.5
+                val driftRatio = (adjustedH - 0.5) * 0.0015 * (horizonSeconds / 60.0)
+                (currentPrice * (1.0 + driftRatio)) + velocityImpulse
+            }
+            horizonSeconds <= 180 -> {
+                // Scalping horizons: exponential velocity decay + sublinear diffusion
+                val decayFactor = 1.0 - Math.exp(-horizonSeconds / 45.0)
+                val velocityImpulse = snapshot.velocity * 45.0 * decayFactor * 0.15
+                val diffusionScale = Math.sqrt(horizonSeconds / 30.0)
+                val trendDamping = 1.0 / (1.0 + (horizonSeconds - 30.0) * 0.0006)
+                val driftRatio = (adjustedH - 0.5) * 0.0015 * (30.0 / 60.0) * diffusionScale * trendDamping
+                (currentPrice * (1.0 + driftRatio)) + velocityImpulse
+            }
+            else -> {
+                // Macro horizons (>= 240s): zero velocity persistence + square-root diffusion + buffer pull
+                val diffusionScale = Math.sqrt(horizonSeconds / 30.0)
+                val trendDamping = 1.0 / (1.0 + horizonSeconds * 0.0008)
+                val driftRatio = (adjustedH - 0.5) * 0.0015 * (30.0 / 60.0) * diffusionScale * trendDamping
+                val bufferPullRatio = if (currentPrice > 0.0) {
+                    ((settlementReference - currentPrice) / currentPrice) * 0.03 * (horizonSeconds / 1200.0)
+                } else 0.0
+                currentPrice * (1.0 + driftRatio + bufferPullRatio)
+            }
+        }
+
+        // For 90s, maintain direction resolution relative to settlement reference
+        val finalDecisionH = if (horizonSeconds == 90) {
+            when {
+                decisionH == "DOWN" -> "DOWN"
+                decisionH == "UP" -> "UP"
+                predPriceH > settlementReference && predPriceH >= currentPrice -> "UP"
+                predPriceH < settlementReference && predPriceH <= currentPrice -> "DOWN"
+                predPriceH < currentPrice -> "DOWN"
+                predPriceH > currentPrice -> "UP"
+                predPriceH > settlementReference -> "UP"
+                predPriceH < settlementReference -> "DOWN"
+                else -> decisionH
+            }
+        } else {
+            decisionH
+        }
+
+        val formulaDisplayH = buildMathDisplay(
+            emaSignal, rsiSignal, momSignal, velSignal, volSignal, volumeSignal, bufSignal,
+            normEma, normRsi, normMom, normVel, normVol, normBuf,
+            adjustedH, finalDecisionH
+        )
+
+        val provenance = HorizonProvenance(
+            sourceExchange = sourceExchange,
+            marketTimestamp = marketTimestamp,
+            localReceiptTimestamp = timestamp,
+            isResearchAdvisory = (horizonSeconds != 30),
+            formulaDisplay = formulaDisplayH,
             researchExternalFeatures = researchFeatures
         )
+
+        return HorizonForecast(
+            horizonSeconds = horizonSeconds,
+            inputTimestamp = timestamp,
+            maturityTimestamp = timestamp + (horizonSeconds * 1000L),
+            modelVersion = if (horizonSeconds == 30) "v1.0-frozen-30s" else "v1.0-research-horizon-${horizonSeconds}s",
+            score = Math.round(adjustedH * 1000.0) / 1000.0,
+            decision = finalDecisionH,
+            strength = strengthH,
+            predictedPrice = Math.round(predPriceH * 100.0) / 100.0,
+            currentPrice = Math.round(currentPrice * 100.0) / 100.0,
+            settlementReference = Math.round(settlementReference * 100.0) / 100.0,
+            featureSnapshot = snapshot,
+            provenance = provenance
+        )
+    }
+
+    /**
+     * Calculates all 12 independent multi-horizon forecasts:
+     * 5s, 10s, 30s, 60s, 90s, 120s, 180s, 240s, 300s, 600s, 900s, 1200s.
+     */
+    fun calculateAllHorizons(
+        currentPrice: Double,
+        snapshot: IndicatorSnapshot,
+        timestamp: Long = System.currentTimeMillis(),
+        settlementReference: Double = currentPrice,
+        researchFeatures: com.example.engine.external.ExternalPredictionFeatures? = null,
+        sourceExchange: String = "CONSOLIDATED_USD",
+        marketTimestamp: Long = timestamp
+    ): List<HorizonForecast> {
+        return PredictionHorizon.ALL_SECONDS.map { horizon ->
+            calculateHorizonForecast(
+                horizonSeconds = horizon,
+                currentPrice = currentPrice,
+                snapshot = snapshot,
+                timestamp = timestamp,
+                settlementReference = settlementReference,
+                researchFeatures = researchFeatures,
+                sourceExchange = sourceExchange,
+                marketTimestamp = marketTimestamp
+            )
+        }
     }
 
     private fun buildMathDisplay(

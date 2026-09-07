@@ -137,6 +137,79 @@ class JsonPredictionLogger(
         inputsObj.put("formulaDisplay", inp.formulaDisplay)
 
         obj.put("inputs", inputsObj)
+
+        // Multi-Horizon Research Forecasts (5s, 10s, 30s, 60s, 90s, 120s, 180s, 240s, 300s, 600s, 900s, 1200s)
+        if (record.horizonForecasts.isNotEmpty()) {
+            val horizonsArray = JSONArray()
+            for (h in record.horizonForecasts) {
+                val hObj = JSONObject()
+                hObj.put("horizonSeconds", h.horizonSeconds)
+                hObj.put("inputTimestamp", h.inputTimestamp)
+                hObj.put("maturityTimestamp", h.maturityTimestamp)
+                hObj.put("modelVersion", h.modelVersion)
+                hObj.put("score", h.score)
+                hObj.put("decision", h.decision)
+                hObj.put("strength", h.strength)
+                hObj.put("predictedPrice", h.predictedPrice)
+                hObj.put("currentPrice", h.currentPrice)
+                hObj.put("settlementReference", h.settlementReference)
+                hObj.put("actualPrice", h.actualPrice ?: JSONObject.NULL)
+                hObj.put("result", h.result ?: "PENDING")
+                hObj.put("resolvedTimestamp", h.resolvedTimestamp ?: JSONObject.NULL)
+
+                val provObj = JSONObject()
+                provObj.put("sourceExchange", h.provenance.sourceExchange)
+                provObj.put("marketTimestamp", h.provenance.marketTimestamp)
+                provObj.put("localReceiptTimestamp", h.provenance.localReceiptTimestamp)
+                provObj.put("isResearchAdvisory", h.provenance.isResearchAdvisory)
+                provObj.put("formulaDisplay", h.provenance.formulaDisplay)
+                hObj.put("provenance", provObj)
+
+                horizonsArray.put(hObj)
+            }
+            obj.put("multiHorizonForecasts", horizonsArray)
+        }
+
+        // Research External Features
+        if (record.researchExternalFeatures != null) {
+            val ext = record.researchExternalFeatures
+            val extObj = JSONObject()
+            extObj.put("isAnyAvailable", ext.isAnyAvailable)
+            extObj.put("activeAvailableCount", ext.activeAvailableCount)
+
+            val tvObj = JSONObject()
+            tvObj.put("isAvailable", ext.tradingViewTrendScore.isAvailable)
+            tvObj.put("normalizedValue", ext.tradingViewTrendScore.normalizedValue ?: JSONObject.NULL)
+            tvObj.put("provenanceStatus", ext.tradingViewTrendScore.provenance.provenanceStatus.name)
+            extObj.put("tradingViewTrendScore", tvObj)
+
+            val cqObj = JSONObject()
+            cqObj.put("isAvailable", ext.cryptoQuantWhaleMomentum.isAvailable)
+            cqObj.put("normalizedValue", ext.cryptoQuantWhaleMomentum.normalizedValue ?: JSONObject.NULL)
+            cqObj.put("provenanceStatus", ext.cryptoQuantWhaleMomentum.provenance.provenanceStatus.name)
+            extObj.put("cryptoQuantWhaleMomentum", cqObj)
+
+            val gnObj = JSONObject()
+            gnObj.put("isAvailable", ext.glassnodeEntityFlowDirection.isAvailable)
+            gnObj.put("normalizedValue", ext.glassnodeEntityFlowDirection.normalizedValue ?: JSONObject.NULL)
+            gnObj.put("provenanceStatus", ext.glassnodeEntityFlowDirection.provenance.provenanceStatus.name)
+            extObj.put("glassnodeEntityFlowDirection", gnObj)
+
+            val cgObj = JSONObject()
+            cgObj.put("isAvailable", ext.coinGlassLiquidationRisk.isAvailable)
+            cgObj.put("normalizedValue", ext.coinGlassLiquidationRisk.normalizedValue ?: JSONObject.NULL)
+            cgObj.put("provenanceStatus", ext.coinGlassLiquidationRisk.provenance.provenanceStatus.name)
+            extObj.put("coinGlassLiquidationRisk", cgObj)
+
+            val cgdObj = JSONObject()
+            cgdObj.put("isAvailable", ext.coinGlassLiquidationDirection.isAvailable)
+            cgdObj.put("normalizedValue", ext.coinGlassLiquidationDirection.normalizedValue ?: JSONObject.NULL)
+            cgdObj.put("provenanceStatus", ext.coinGlassLiquidationDirection.provenance.provenanceStatus.name)
+            extObj.put("coinGlassLiquidationDirection", cgdObj)
+
+            obj.put("researchExternalFeatures", extObj)
+        }
+
         return obj
     }
 

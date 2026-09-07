@@ -108,6 +108,12 @@ class PerformanceTracker {
         priceHistory: List<PricePoint>? = null
     ): List<PredictionRecord> {
         val newlyResolved = mutableListOf<PredictionRecord>()
+
+        // 0. Resolve short-term multi-horizon forecasts in pending predictions (e.g. 5s, 10s)
+        for (record in pendingPredictions) {
+            resolveRecordHorizons(record, currentPrice, currentTimestamp, priceHistory)
+        }
+
         val iterator = pendingPredictions.iterator()
 
         while (iterator.hasNext()) {
@@ -152,8 +158,10 @@ class PerformanceTracker {
             }
         }
 
-        // 2. Resolve authorized 90-second prediction at exact T + 90s on resolved history
+        // 2. Resolve authorized 90-second prediction and extended multi-horizon forecasts on resolved history
         for (record in resolvedPredictions) {
+            resolveRecordHorizons(record, currentPrice, currentTimestamp, priceHistory)
+
             // Never evaluate prematurely before 90s maturity
             if (currentTimestamp >= record.maturityTimestamp90s && record.result90s == null) {
                 val eligible90s = priceHistory?.filter { it.timestamp in record.timestamp..currentTimestamp }
@@ -181,6 +189,73 @@ class PerformanceTracker {
         }
 
         return newlyResolved
+    }
+
+    /**
+     * Resolves individual multi-horizon forecasts with strict no-lookahead enforcement.
+     */
+    private fun resolveRecordHorizons(
+        record: PredictionRecord,
+        currentPrice: Double,
+        currentTimestamp: Long,
+        priceHistory: List<PricePoint>?
+    ) {
+        for (forecast in record.horizonForecasts) {
+            if (forecast.result == null || forecast.result == "PENDING") {
+                if (currentTimestamp >= forecast.maturityTimestamp) {
+                    val eligible = priceHistory?.filter { it.timestamp in record.timestamp..currentTimestamp }
+                    val exactPoint = eligible?.find { it.timestamp == forecast.maturityTimestamp }
+
+                    if (exactPoint != null || currentTimestamp == forecast.maturityTimestamp) {
+                        val obsPrice = exactPoint?.price ?: currentPrice
+                        forecast.actualPrice = obsPrice
+                        forecast.resolvedTimestamp = currentTimestamp
+                        val delta = obsPrice - forecast.settlementReference
+                        forecast.result = when (forecast.decision) {
+                            "UP" -> if (delta > 0.0) "CORRECT" else "INCORRECT"
+                            "DOWN" -> if (delta < 0.0) "CORRECT" else "INCORRECT"
+                            else -> "NO-TRADE"
+                        }
+                    } else {
+                        forecast.actualPrice = null
+                        forecast.resolvedTimestamp = currentTimestamp
+                        forecast.result = "UNRESOLVED"
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Retrieves empirical performance stats for a specific research horizon.
+     */
+    @Synchronized
+    fun getHorizonStats(horizonSeconds: Int): HorizonPerformanceStats {
+        val allRecords = (pendingPredictions + resolvedPredictions).distinctBy { it.predictionId }
+        val forecasts = allRecords.mapNotNull { it.getForecast(horizonSeconds) }
+        val resolved = forecasts.filter { it.result != null && it.result != "PENDING" }
+        val evaluated = resolved.filter { it.result == "CORRECT" || it.result == "INCORRECT" }
+        val correct = evaluated.count { it.result == "CORRECT" }
+        val incorrect = evaluated.count { it.result == "INCORRECT" }
+        val unresolved = resolved.count { it.result == "UNRESOLVED" }
+        val winRate = if (evaluated.isNotEmpty()) {
+            ((correct.toDouble() / evaluated.size) * 1000.0).roundToInt() / 10.0
+        } else 0.0
+
+        return HorizonPerformanceStats(
+            horizonSeconds = horizonSeconds,
+            totalForecasts = forecasts.size,
+            resolvedCount = resolved.size,
+            correctCount = correct,
+            incorrectCount = incorrect,
+            unresolvedCount = unresolved,
+            winRate = winRate
+        )
+    }
+
+    @Synchronized
+    fun getAllHorizonStats(): List<HorizonPerformanceStats> {
+        return PredictionHorizon.ALL_SECONDS.map { getHorizonStats(it) }
     }
 
     @Synchronized

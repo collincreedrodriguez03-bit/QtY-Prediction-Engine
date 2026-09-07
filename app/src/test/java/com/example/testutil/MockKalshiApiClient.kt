@@ -2,6 +2,8 @@ package com.example.testutil
 
 import com.example.kalshi.KalshiApiClient
 import com.example.kalshi.KalshiBalance
+import com.example.kalshi.KalshiMarket
+import com.example.kalshi.KalshiOrderBookSnapshot
 import com.example.kalshi.KalshiOrderRequest
 import com.example.kalshi.KalshiOrderResponse
 import com.example.kalshi.KalshiPosition
@@ -32,6 +34,16 @@ class MockKalshiApiClient(
     var getOrderResult: ((String) -> Result<KalshiOrderResponse>)? = null
     var balanceResult: Result<KalshiBalance> = Result.success(KalshiBalance(balanceCents = 10000))
     var positionsResult: Result<List<KalshiPosition>> = Result.success(emptyList())
+    var activeContractsResult: Result<List<KalshiMarket>> = Result.success(emptyList())
+    var orderBookResult: ((String) -> Result<KalshiOrderBookSnapshot>)? = null
+
+    override suspend fun getActiveBtc15mContracts(): Result<List<KalshiMarket>> {
+        return activeContractsResult
+    }
+
+    override suspend fun getOrderBook(ticker: String, depth: Int): Result<KalshiOrderBookSnapshot> {
+        return orderBookResult?.invoke(ticker) ?: Result.failure(Exception("Order book not configured"))
+    }
 
     override fun isAuthenticated(): Boolean {
         return authenticated

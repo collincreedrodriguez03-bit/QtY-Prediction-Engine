@@ -223,7 +223,8 @@ class FinalExecutionGateTest {
         )
 
         assertTrue(decision is ExecutionGateDecision.Reject)
-        assertTrue((decision as ExecutionGateDecision.Reject).reason.contains("Model probability does not establish required edge"))
+        val rejectReason = (decision as ExecutionGateDecision.Reject).reason
+        assertTrue("Expected edge rejection but was: '$rejectReason'", rejectReason.contains("Model probability does not establish required edge"))
     }
 
     @Test

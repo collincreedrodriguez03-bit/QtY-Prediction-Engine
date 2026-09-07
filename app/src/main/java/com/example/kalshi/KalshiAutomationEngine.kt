@@ -996,8 +996,8 @@ class KalshiAutomationEngine(
 
         // Fetch active BTC 15m markets
         val marketsRes = apiClient.getActiveBtc15mContracts()
-        var activeMarket: KalshiMarket? = null
-        var validationMsg = "No active contract"
+        var activeMarket: KalshiMarket? = _state.value.activeContract
+        var validationMsg = _state.value.contractValidationMessage
 
         marketsRes.onSuccess { markets ->
             val nowMs = System.currentTimeMillis()
@@ -1006,8 +1006,10 @@ class KalshiAutomationEngine(
             }
 
             if (candidateContracts.isEmpty()) {
-                activeMarket = null
-                validationMsg = "No active BTC 15m contract"
+                if (markets.isNotEmpty() || activeMarket == null) {
+                    activeMarket = null
+                    validationMsg = "No active BTC 15m contract"
+                }
             } else {
                 val earliestCloseMs = candidateContracts.minOf { it.closeTimeMs }
                 val windowCandidates = candidateContracts.filter { it.closeTimeMs == earliestCloseMs }
@@ -1022,7 +1024,9 @@ class KalshiAutomationEngine(
                 }
             }
         }.onFailure { err ->
-            validationMsg = "Error discovering contract: ${err.message}"
+            if (activeMarket == null) {
+                validationMsg = "Error discovering contract: ${err.message}"
+            }
         }
 
         // Fetch order book for active contract if available (do not manufacture missing data)
@@ -1042,9 +1046,9 @@ class KalshiAutomationEngine(
 
         _state.value = _state.value.copy(
             isAuthenticated = auth,
-            activeContract = activeMarket,
+            activeContract = activeMarket ?: _state.value.activeContract,
             contractValidationMessage = if (_state.value.isAutomationEnabled) validationMsg else "Automation OFF",
-            latestOrderBook = orderBook
+            latestOrderBook = orderBook ?: _state.value.latestOrderBook
         )
     }
 

@@ -87,21 +87,45 @@ open class CoinGlassLiquidationRiskFeature(
 
     /**
      * Point-in-time observation of liquidation events and aggregate derivatives state.
+     * Never fabricates long/short split. If authentic directional split is absent,
+     * directional fields remain null and direction feature marks unavailable.
      */
     data class RawCoinGlassObservation(
         val timestampMs: Long,
-        val longLiquidationUsd: Double,
-        val shortLiquidationUsd: Double,
+        val longLiquidationUsd: Double? = null,
+        val shortLiquidationUsd: Double? = null,
+        val totalLiquidationUsd: Double = (longLiquidationUsd ?: 0.0) + (shortLiquidationUsd ?: 0.0),
         val openInterestUsd: Double = 0.0,
         val btcPrice: Double = 0.0,
         val isRealtimeStream: Boolean = false,
-        val dataVersion: String = "v3"
-    )
+        val dataVersion: String = "v3",
+        val hasAuthenticDirectionalSplit: Boolean = (longLiquidationUsd != null && shortLiquidationUsd != null)
+    ) {
+        constructor(
+            timestampMs: Long,
+            longLiquidationUsd: Double,
+            shortLiquidationUsd: Double
+        ) : this(
+            timestampMs = timestampMs,
+            longLiquidationUsd = longLiquidationUsd,
+            shortLiquidationUsd = shortLiquidationUsd,
+            totalLiquidationUsd = longLiquidationUsd + shortLiquidationUsd,
+            openInterestUsd = 0.0,
+            btcPrice = 0.0,
+            isRealtimeStream = false,
+            dataVersion = "v3",
+            hasAuthenticDirectionalSplit = true
+        )
+    }
 
     data class LiquidationResult(
         val riskFeature: ResearchFeatureValue,
-        val directionFeature: ResearchFeatureValue
+        val directionFeature: ResearchFeatureValue,
+        val authenticObservations: List<RawCoinGlassObservation> = emptyList()
     )
+
+    var latestFetchedObservations: List<RawCoinGlassObservation> = emptyList()
+        private set
 
     /**
      * Calculates derived Liquidation Risk [0.0, 1.0] and Liquidation Direction [-1.0, +1.0]
@@ -135,15 +159,19 @@ open class CoinGlassLiquidationRiskFeature(
                 source = SOURCE_NAME,
                 metric = RISK_METRIC,
                 status = ExternalFeatureProvenanceStatus.FUTURE_DATED,
-                reason = "Observation timestamp (${latest.timestampMs}) is future-dated relative to clock ($nowMs)"
+                reason = "Observation timestamp (${latest.timestampMs}) is future-dated relative to clock ($nowMs)",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
             val futureDir = ResearchFeatureValue.unavailable(
                 source = SOURCE_NAME,
                 metric = DIRECTION_METRIC,
                 status = ExternalFeatureProvenanceStatus.FUTURE_DATED,
-                reason = "Observation timestamp (${latest.timestampMs}) is future-dated relative to clock ($nowMs)"
+                reason = "Observation timestamp (${latest.timestampMs}) is future-dated relative to clock ($nowMs)",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
-            return LiquidationResult(futureRisk, futureDir)
+            return LiquidationResult(futureRisk, futureDir, observations)
         }
 
         // 2. Staleness validation
@@ -153,36 +181,49 @@ open class CoinGlassLiquidationRiskFeature(
                 source = SOURCE_NAME,
                 metric = RISK_METRIC,
                 status = ExternalFeatureProvenanceStatus.STALE_DATA,
-                reason = "CoinGlass observation is stale (age: ${ageMs}ms > threshold: ${MAX_ALLOWABLE_STALENESS_MS}ms)"
+                reason = "CoinGlass observation is stale (age: ${ageMs}ms > threshold: ${MAX_ALLOWABLE_STALENESS_MS}ms)",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
             val staleDir = ResearchFeatureValue.unavailable(
                 source = SOURCE_NAME,
                 metric = DIRECTION_METRIC,
                 status = ExternalFeatureProvenanceStatus.STALE_DATA,
-                reason = "CoinGlass observation is stale (age: ${ageMs}ms > threshold: ${MAX_ALLOWABLE_STALENESS_MS}ms)"
+                reason = "CoinGlass observation is stale (age: ${ageMs}ms > threshold: ${MAX_ALLOWABLE_STALENESS_MS}ms)",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
-            return LiquidationResult(staleRisk, staleDir)
+            return LiquidationResult(staleRisk, staleDir, observations)
         }
 
         // 3. Finite domain checks
-        if (latest.longLiquidationUsd < 0.0 || latest.shortLiquidationUsd < 0.0 ||
-            latest.longLiquidationUsd.isNaN() || latest.shortLiquidationUsd.isNaN()) {
+        val longUsd = latest.longLiquidationUsd
+        val shortUsd = latest.shortLiquidationUsd
+        val totalUsd = latest.totalLiquidationUsd
+
+        if (totalUsd < 0.0 || totalUsd.isNaN() || totalUsd.isInfinite() ||
+            (longUsd != null && (longUsd < 0.0 || longUsd.isNaN() || longUsd.isInfinite())) ||
+            (shortUsd != null && (shortUsd < 0.0 || shortUsd.isNaN() || shortUsd.isInfinite()))) {
             val malformedRisk = ResearchFeatureValue.unavailable(
                 source = SOURCE_NAME,
                 metric = RISK_METRIC,
                 status = ExternalFeatureProvenanceStatus.MALFORMED_PAYLOAD,
-                reason = "Negative or NaN liquidation values: long=${latest.longLiquidationUsd}, short=${latest.shortLiquidationUsd}"
+                reason = "Negative or NaN liquidation values: long=$longUsd, short=$shortUsd, total=$totalUsd",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
             val malformedDir = ResearchFeatureValue.unavailable(
                 source = SOURCE_NAME,
                 metric = DIRECTION_METRIC,
                 status = ExternalFeatureProvenanceStatus.MALFORMED_PAYLOAD,
-                reason = "Negative or NaN liquidation values: long=${latest.longLiquidationUsd}, short=${latest.shortLiquidationUsd}"
+                reason = "Negative or NaN liquidation values: long=$longUsd, short=$shortUsd, total=$totalUsd",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
-            return LiquidationResult(malformedRisk, malformedDir)
+            return LiquidationResult(malformedRisk, malformedDir, observations)
         }
 
-        val totalLiqUsd = latest.longLiquidationUsd + latest.shortLiquidationUsd
+        val totalLiqUsd = if (totalUsd > 0.0) totalUsd else ((longUsd ?: 0.0) + (shortUsd ?: 0.0))
 
         // --- DERIVED METRIC 1: Liquidation Intensity & Risk [0.0, 1.0] ---
         // Normal 1-minute liquidation volume for BTC is ~$50k - $200k.
@@ -195,17 +236,6 @@ open class CoinGlassLiquidationRiskFeature(
 
         // Baseline risk score: 0.0 to 1.0
         val derivedRiskScore = Math.round(abnormalSpikeFactor * 1000.0) / 1000.0
-
-        // --- DERIVED METRIC 2: Liquidation Imbalance & Direction [-1.0, +1.0] ---
-        // Imbalance = (ShortLiq - LongLiq) / (TotalLiq)
-        // If ShortLiq >> LongLiq: positive imbalance (short squeeze pressure / upward liquidation cascade)
-        // If LongLiq >> ShortLiq: negative imbalance (long liquidation cascade / downward liquidation cascade)
-        val imbalance = if (totalLiqUsd > 1000.0) {
-            ((latest.shortLiquidationUsd - latest.longLiquidationUsd) / totalLiqUsd).coerceIn(-1.0, 1.0)
-        } else {
-            0.0 // Insignificant liquidation volume = neutral direction
-        }
-        val derivedDirectionScore = Math.round(imbalance * 1000.0) / 1000.0
 
         val provenanceStatus = if (latest.isRealtimeStream) {
             ExternalFeatureProvenanceStatus.AUTHENTIC_REALTIME_STREAM
@@ -223,31 +253,51 @@ open class CoinGlassLiquidationRiskFeature(
                 sourceTimestampMs = latest.timestampMs,
                 retrievalTimestampMs = nowMs,
                 apiVersion = latest.dataVersion,
-                rawValue = "longLiq=${latest.longLiquidationUsd}, shortLiq=${latest.shortLiquidationUsd}, total=$totalLiqUsd",
+                rawValue = "longLiq=$longUsd, shortLiq=$shortUsd, total=$totalLiqUsd",
                 derivedValue = derivedRiskScore,
                 provenanceStatus = provenanceStatus,
                 notes = "Liquidation risk intensity derived from authentic derivatives volume"
             )
         )
 
-        val dirFeature = ResearchFeatureValue(
-            isAvailable = true,
-            normalizedValue = derivedDirectionScore,
-            rawObservation = imbalance,
-            provenance = ExternalObservationProvenance(
+        // --- DERIVED METRIC 2: Liquidation Imbalance & Direction [-1.0, +1.0] ---
+        // Authentic directional data required: NEVER substitute or fabricate 50/50 split.
+        // If directional data is not available, direction feature remains UNAVAILABLE (null).
+        val dirFeature = if (latest.hasAuthenticDirectionalSplit && longUsd != null && shortUsd != null) {
+            val imbalance = if (totalLiqUsd > 1000.0) {
+                ((shortUsd - longUsd) / totalLiqUsd).coerceIn(-1.0, 1.0)
+            } else {
+                0.0 // Insignificant liquidation volume = neutral direction
+            }
+            val derivedDirectionScore = Math.round(imbalance * 1000.0) / 1000.0
+            ResearchFeatureValue(
+                isAvailable = true,
+                normalizedValue = derivedDirectionScore,
+                rawObservation = imbalance,
+                provenance = ExternalObservationProvenance(
+                    source = SOURCE_NAME,
+                    metric = DIRECTION_METRIC,
+                    sourceTimestampMs = latest.timestampMs,
+                    retrievalTimestampMs = nowMs,
+                    apiVersion = latest.dataVersion,
+                    rawValue = "longLiq=$longUsd, shortLiq=$shortUsd, imbalance=$imbalance",
+                    derivedValue = derivedDirectionScore,
+                    provenanceStatus = provenanceStatus,
+                    notes = "Liquidation direction ratio preserved separately from risk intensity"
+                )
+            )
+        } else {
+            ResearchFeatureValue.unavailable(
                 source = SOURCE_NAME,
                 metric = DIRECTION_METRIC,
+                status = ExternalFeatureProvenanceStatus.UNAVAILABLE,
+                reason = "Authentic directional long/short liquidation split not available",
                 sourceTimestampMs = latest.timestampMs,
-                retrievalTimestampMs = nowMs,
-                apiVersion = latest.dataVersion,
-                rawValue = "imbalance=$imbalance",
-                derivedValue = derivedDirectionScore,
-                provenanceStatus = provenanceStatus,
-                notes = "Liquidation direction ratio preserved separately from risk intensity"
+                retrievalTimestampMs = nowMs
             )
-        )
+        }
 
-        return LiquidationResult(riskFeature, dirFeature)
+        return LiquidationResult(riskFeature, dirFeature, observations)
     }
 
     /**
@@ -340,35 +390,48 @@ open class CoinGlassLiquidationRiskFeature(
                     val list = dataObj.optJSONArray("list")
                     val observations = mutableListOf<RawCoinGlassObservation>()
 
+                    val parseItemToObservation = { obj: JSONObject ->
+                        val t = obj.optLong("time", obj.optLong("createTime", nowMs))
+                        val tMs = if (t < 10_000_000_000L) t * 1000L else t
+
+                        val hasLong = obj.has("buyVolUsd") || obj.has("longLiquidation") || obj.has("longVolUsd")
+                        val hasShort = obj.has("sellVolUsd") || obj.has("shortLiquidation") || obj.has("shortVolUsd")
+                        val hasTotal = obj.has("volUsd") || obj.has("totalLiquidation") || obj.has("totalVolUsd")
+
+                        val longVol = if (hasLong) obj.optDouble("buyVolUsd", obj.optDouble("longLiquidation", obj.optDouble("longVolUsd", Double.NaN))) else null
+                        val shortVol = if (hasShort) obj.optDouble("sellVolUsd", obj.optDouble("shortLiquidation", obj.optDouble("shortVolUsd", Double.NaN))) else null
+
+                        val validDirectional = longVol != null && shortVol != null && !longVol.isNaN() && !shortVol.isNaN() && longVol >= 0.0 && shortVol >= 0.0
+                        val totalVol = when {
+                            hasTotal -> obj.optDouble("volUsd", obj.optDouble("totalLiquidation", obj.optDouble("totalVolUsd", 0.0)))
+                            validDirectional -> longVol!! + shortVol!!
+                            else -> 0.0
+                        }
+
+                        if (tMs > 0L && (totalVol > 0.0 || validDirectional)) {
+                            RawCoinGlassObservation(
+                                timestampMs = tMs,
+                                longLiquidationUsd = if (validDirectional) longVol else null,
+                                shortLiquidationUsd = if (validDirectional) shortVol else null,
+                                totalLiquidationUsd = totalVol,
+                                hasAuthenticDirectionalSplit = validDirectional
+                            )
+                        } else null
+                    }
+
                     if (list != null && list.length() > 0) {
                         for (i in 0 until list.length()) {
                             val item = list.getJSONObject(i)
-                            val t = item.optLong("time", item.optLong("createTime", 0L))
-                            val longVol = item.optDouble("buyVolUsd", item.optDouble("longLiquidation", 0.0))
-                            val shortVol = item.optDouble("sellVolUsd", item.optDouble("shortLiquidation", 0.0))
-                            val tMs = if (t < 10_000_000_000L) t * 1000L else t
-                            if (tMs > 0L) {
-                                observations.add(
-                                    RawCoinGlassObservation(
-                                        timestampMs = tMs,
-                                        longLiquidationUsd = longVol,
-                                        shortLiquidationUsd = shortVol
-                                    )
-                                )
+                            val obs = parseItemToObservation(item)
+                            if (obs != null) {
+                                observations.add(obs)
                             }
                         }
                     } else {
-                        // Single summary object fallback
-                        val longVol = dataObj.optDouble("buyVolUsd", 0.0)
-                        val shortVol = dataObj.optDouble("sellVolUsd", 0.0)
-                        val t = dataObj.optLong("time", nowMs)
-                        observations.add(
-                            RawCoinGlassObservation(
-                                timestampMs = t,
-                                longLiquidationUsd = longVol,
-                                shortLiquidationUsd = shortVol
-                            )
-                        )
+                        val obs = parseItemToObservation(dataObj)
+                        if (obs != null) {
+                            observations.add(obs)
+                        }
                     }
 
                     if (observations.isEmpty()) {
@@ -385,6 +448,7 @@ open class CoinGlassLiquidationRiskFeature(
                         return@withContext LiquidationResult(r, d)
                     }
 
+                    latestFetchedObservations = observations
                     calculateFromObservations(observations, nowMs)
                 }
             } catch (e: Exception) {

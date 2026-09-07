@@ -1,12 +1,15 @@
 package com.example.engine.external
 
 import com.example.data.PricePoint
+import com.example.data.SafeLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 
 /**
  * Orchestrator and coordinator for all 4 external research features:
@@ -28,6 +31,12 @@ class ExternalFeatureCoordinator(
     val coinGlassFeature: CoinGlassLiquidationRiskFeature = CoinGlassLiquidationRiskFeature()
 ) {
     private val scope = CoroutineScope(Dispatchers.IO)
+    private val refreshMutex = Mutex()
+
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+    var lastRefreshTimestampMs: Long = 0L
+        private set
 
     private val _latestFeatures = MutableStateFlow(ExternalPredictionFeatures.empty())
     val latestFeatures: StateFlow<ExternalPredictionFeatures> = _latestFeatures.asStateFlow()
@@ -153,45 +162,46 @@ class ExternalFeatureCoordinator(
 
     /**
      * Trigger background asynchronous live refresh across authenticated remote APIs.
+     * Never blocks or slows the caller. Concurrency-safe via Mutex tryLock.
+     * Stores authentic directional observations without fabrication.
      */
-    fun refreshLiveApis(nowMs: Long = System.currentTimeMillis()) {
-        scope.launch {
-            if (cryptoQuantFeature.hasValidCredentials()) {
-                val res = cryptoQuantFeature.fetchLiveObservation(nowMs)
-                if (res.isAvailable && res.rawObservation != null) {
-                    addCryptoQuantObservation(
-                        CryptoQuantWhaleMomentumFeature.RawCryptoQuantObservation(
-                            timestampMs = res.provenance.sourceTimestampMs,
-                            exchangeWhaleRatio = res.rawObservation,
-                            exchangeInflowBtc = 0.0,
-                            exchangeOutflowBtc = 0.0
-                        )
-                    )
-                }
+    fun refreshLiveApis(nowMs: Long = System.currentTimeMillis()): Job {
+        return scope.launch {
+            if (!refreshMutex.tryLock()) {
+                // Refresh already active, avoid duplicate concurrent network calls
+                return@launch
             }
-            if (glassnodeFeature.hasValidCredentials()) {
-                val res = glassnodeFeature.fetchLiveObservation(nowMs)
-                if (res.isAvailable && res.rawObservation != null) {
-                    addGlassnodeObservation(
-                        GlassnodeEntityFlowFeature.RawGlassnodeObservation(
-                            timestampMs = res.provenance.sourceTimestampMs,
-                            netFlowBtc = res.rawObservation,
-                            isPointInTime = true
-                        )
-                    )
+            _isRefreshing.value = true
+            try {
+                if (cryptoQuantFeature.hasValidCredentials()) {
+                    val res = cryptoQuantFeature.fetchLiveObservation(nowMs)
+                    if (res.isAvailable) {
+                        for (obs in cryptoQuantFeature.latestFetchedObservations) {
+                            addCryptoQuantObservation(obs)
+                        }
+                    }
                 }
-            }
-            if (coinGlassFeature.hasValidCredentials()) {
-                val res = coinGlassFeature.fetchLiveObservation(nowMs)
-                if (res.riskFeature.isAvailable && res.riskFeature.rawObservation != null) {
-                    addCoinGlassObservation(
-                        CoinGlassLiquidationRiskFeature.RawCoinGlassObservation(
-                            timestampMs = res.riskFeature.provenance.sourceTimestampMs,
-                            longLiquidationUsd = res.riskFeature.rawObservation / 2.0,
-                            shortLiquidationUsd = res.riskFeature.rawObservation / 2.0
-                        )
-                    )
+                if (glassnodeFeature.hasValidCredentials()) {
+                    val res = glassnodeFeature.fetchLiveObservation(nowMs)
+                    if (res.isAvailable) {
+                        for (obs in glassnodeFeature.latestFetchedObservations) {
+                            addGlassnodeObservation(obs)
+                        }
+                    }
                 }
+                if (coinGlassFeature.hasValidCredentials()) {
+                    val res = coinGlassFeature.fetchLiveObservation(nowMs)
+                    val obsList = res.authenticObservations.ifEmpty { coinGlassFeature.latestFetchedObservations }
+                    for (obs in obsList) {
+                        addCoinGlassObservation(obs)
+                    }
+                }
+                lastRefreshTimestampMs = nowMs
+            } catch (e: Exception) {
+                SafeLog.w("ExternalFeatureCoordinator", "Live API refresh error: ${e.message}")
+            } finally {
+                _isRefreshing.value = false
+                refreshMutex.unlock()
             }
         }
     }

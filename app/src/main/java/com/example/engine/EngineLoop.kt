@@ -76,6 +76,7 @@ class EngineLoop(
 ) {
     private val scope = CoroutineScope(Dispatchers.Default)
     private var job: Job? = null
+    private var externalRefreshJob: Job? = null
     private val cycleMutex = Mutex()
 
     private val _state = MutableStateFlow(EngineState())
@@ -101,6 +102,23 @@ class EngineLoop(
                         recentPrices = priceHistory.getPrices(),
                         latestPrice = historicalCandles.last().price
                     )
+                }
+            }
+        }
+
+        // Background External Research API Refresh Loop (runs asynchronously on Dispatchers.IO, never blocks 2s heartbeat)
+        externalRefreshJob = scope.launch(Dispatchers.IO) {
+            try {
+                externalFeatureCoordinator.refreshLiveApis(System.currentTimeMillis())
+            } catch (e: Exception) {
+                SafeLog.w("QtY_EngineLoop", "Initial external API refresh error: ${e.message}")
+            }
+            while (isActive) {
+                delay(30_000L) // Decoupled 30-second cadence
+                try {
+                    externalFeatureCoordinator.refreshLiveApis(System.currentTimeMillis())
+                } catch (e: Exception) {
+                    SafeLog.w("QtY_EngineLoop", "Periodic external API refresh error: ${e.message}")
                 }
             }
         }
@@ -131,8 +149,17 @@ class EngineLoop(
     fun stop() {
         job?.cancel()
         job = null
+        externalRefreshJob?.cancel()
+        externalRefreshJob = null
         dataFeed.stopStreaming()
         _state.value = _state.value.copy(isRunning = false)
+    }
+
+    /**
+     * Trigger an on-demand external API refresh without blocking or disturbing the 2-second engine heartbeat.
+     */
+    fun triggerExternalApiRefresh(nowMs: Long = System.currentTimeMillis()): Job {
+        return externalFeatureCoordinator.refreshLiveApis(nowMs)
     }
 
     /**
@@ -380,13 +407,17 @@ class EngineLoop(
 
         val contractSettlementRef = priceHistory.get15mContractSettlementReference(point.timestamp) ?: point.price
 
+        // Research Features: strictly evaluated in parallel without altering production model weights
+        val researchFeatures = externalFeatureCoordinator.computeFeatures(allPoints, point.timestamp)
+
         val prediction = predictionEngine.predict(
             currentPrice = point.price,
             snapshot = snapshot,
             timestamp = point.timestamp,
             learningBias = perfStats.learningBiasAdjustment,
             factorOffsets = factorOffsets,
-            settlementReference = contractSettlementRef
+            settlementReference = contractSettlementRef,
+            researchFeatures = researchFeatures
         )
 
         performanceTracker.registerPrediction(prediction)
@@ -409,7 +440,8 @@ class EngineLoop(
             totalRecordedPredictions = logger.getAllPredictions().size,
             performanceStats = perfStats,
             rollingReferencePrice = rollingRef,
-            contractSettlementReference = contractSettlementRef
+            contractSettlementReference = contractSettlementRef,
+            externalResearchFeatures = researchFeatures
         )
 
         return prediction

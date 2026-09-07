@@ -58,7 +58,9 @@ class TradingViewTrendFeature {
                 source = SOURCE_NAME,
                 metric = METRIC_NAME,
                 status = ExternalFeatureProvenanceStatus.FUTURE_DATED,
-                reason = "Observation timestamp (${latestPoint.timestamp}) is future-dated relative to clock ($nowMs)"
+                reason = "Observation timestamp (${latestPoint.timestamp}) is future-dated relative to clock ($nowMs)",
+                sourceTimestampMs = latestPoint.timestamp,
+                retrievalTimestampMs = nowMs
             )
         }
 
@@ -69,7 +71,9 @@ class TradingViewTrendFeature {
                 source = SOURCE_NAME,
                 metric = METRIC_NAME,
                 status = ExternalFeatureProvenanceStatus.STALE_DATA,
-                reason = "Latest price point is stale (age: ${ageMs}ms > threshold: ${MAX_ALLOWABLE_STALENESS_MS}ms)"
+                reason = "Latest price point is stale (age: ${ageMs}ms > threshold: ${MAX_ALLOWABLE_STALENESS_MS}ms)",
+                sourceTimestampMs = latestPoint.timestamp,
+                retrievalTimestampMs = nowMs
             )
         }
 
@@ -79,7 +83,9 @@ class TradingViewTrendFeature {
                 source = SOURCE_NAME,
                 metric = METRIC_NAME,
                 status = ExternalFeatureProvenanceStatus.UNAVAILABLE,
-                reason = "Insufficient price history (${points.size} < 15 points)"
+                reason = "Insufficient price history (${points.size} < 15 points)",
+                sourceTimestampMs = latestPoint.timestamp,
+                retrievalTimestampMs = nowMs
             )
         }
 
@@ -90,7 +96,9 @@ class TradingViewTrendFeature {
                 source = SOURCE_NAME,
                 metric = METRIC_NAME,
                 status = ExternalFeatureProvenanceStatus.MALFORMED_PAYLOAD,
-                reason = "Current price is non-positive ($currentPrice)"
+                reason = "Current price is non-positive ($currentPrice)",
+                sourceTimestampMs = latestPoint.timestamp,
+                retrievalTimestampMs = nowMs
             )
         }
 

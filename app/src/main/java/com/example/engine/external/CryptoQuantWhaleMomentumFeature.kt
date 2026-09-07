@@ -94,6 +94,9 @@ open class CryptoQuantWhaleMomentumFeature(
         val dataVersion: String = "v1"
     )
 
+    var latestFetchedObservations: List<RawCryptoQuantObservation> = emptyList()
+        private set
+
     /**
      * Calculates derived Whale Momentum from point-in-time observation series.
      */
@@ -120,7 +123,9 @@ open class CryptoQuantWhaleMomentumFeature(
                 source = SOURCE_NAME,
                 metric = METRIC_NAME,
                 status = ExternalFeatureProvenanceStatus.FUTURE_DATED,
-                reason = "Observation timestamp (${latest.timestampMs}) is future-dated relative to clock ($nowMs)"
+                reason = "Observation timestamp (${latest.timestampMs}) is future-dated relative to clock ($nowMs)",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
         }
 
@@ -131,7 +136,9 @@ open class CryptoQuantWhaleMomentumFeature(
                 source = SOURCE_NAME,
                 metric = METRIC_NAME,
                 status = ExternalFeatureProvenanceStatus.STALE_DATA,
-                reason = "CryptoQuant observation is stale (age: ${ageMs}ms > threshold: ${MAX_ALLOWABLE_STALENESS_MS}ms)"
+                reason = "CryptoQuant observation is stale (age: ${ageMs}ms > threshold: ${MAX_ALLOWABLE_STALENESS_MS}ms)",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
         }
 
@@ -141,7 +148,9 @@ open class CryptoQuantWhaleMomentumFeature(
                 source = SOURCE_NAME,
                 metric = METRIC_NAME,
                 status = ExternalFeatureProvenanceStatus.MALFORMED_PAYLOAD,
-                reason = "Exchange Whale Ratio out of domain [0.0, 1.0]: ${latest.exchangeWhaleRatio}"
+                reason = "Exchange Whale Ratio out of domain [0.0, 1.0]: ${latest.exchangeWhaleRatio}",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
         }
 
@@ -309,6 +318,7 @@ open class CryptoQuantWhaleMomentumFeature(
                         )
                     }
 
+                    latestFetchedObservations = observations
                     calculateFromObservations(observations, nowMs)
                 }
             } catch (e: Exception) {

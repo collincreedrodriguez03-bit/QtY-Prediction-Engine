@@ -46,8 +46,14 @@ data class ResearchFeatureValue(
     val provenance: ExternalObservationProvenance
 ) {
     companion object {
-        fun unavailable(source: String, metric: String, status: ExternalFeatureProvenanceStatus, reason: String): ResearchFeatureValue {
-            val now = System.currentTimeMillis()
+        fun unavailable(
+            source: String,
+            metric: String,
+            status: ExternalFeatureProvenanceStatus,
+            reason: String,
+            sourceTimestampMs: Long = 0L,
+            retrievalTimestampMs: Long = System.currentTimeMillis()
+        ): ResearchFeatureValue {
             return ResearchFeatureValue(
                 isAvailable = false,
                 normalizedValue = null,
@@ -55,8 +61,8 @@ data class ResearchFeatureValue(
                 provenance = ExternalObservationProvenance(
                     source = source,
                     metric = metric,
-                    sourceTimestampMs = 0L,
-                    retrievalTimestampMs = now,
+                    sourceTimestampMs = sourceTimestampMs,
+                    retrievalTimestampMs = retrievalTimestampMs,
                     provenanceStatus = status,
                     notes = reason
                 )

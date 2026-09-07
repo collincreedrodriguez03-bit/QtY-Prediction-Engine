@@ -93,6 +93,9 @@ open class GlassnodeEntityFlowFeature(
         val dataVersion: String = "v1-pit"
     )
 
+    var latestFetchedObservations: List<RawGlassnodeObservation> = emptyList()
+        private set
+
     /**
      * Calculates derived Entity Flow Direction from chronological point-in-time observations.
      */
@@ -119,7 +122,9 @@ open class GlassnodeEntityFlowFeature(
                 source = SOURCE_NAME,
                 metric = METRIC_NAME,
                 status = ExternalFeatureProvenanceStatus.FUTURE_DATED,
-                reason = "Observation timestamp (${latest.timestampMs}) is future-dated relative to clock ($nowMs)"
+                reason = "Observation timestamp (${latest.timestampMs}) is future-dated relative to clock ($nowMs)",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
         }
 
@@ -130,7 +135,9 @@ open class GlassnodeEntityFlowFeature(
                 source = SOURCE_NAME,
                 metric = METRIC_NAME,
                 status = ExternalFeatureProvenanceStatus.STALE_DATA,
-                reason = "Glassnode observation is stale (age: ${ageMs}ms > threshold: ${MAX_ALLOWABLE_STALENESS_MS}ms)"
+                reason = "Glassnode observation is stale (age: ${ageMs}ms > threshold: ${MAX_ALLOWABLE_STALENESS_MS}ms)",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
         }
 
@@ -140,7 +147,9 @@ open class GlassnodeEntityFlowFeature(
                 source = SOURCE_NAME,
                 metric = METRIC_NAME,
                 status = ExternalFeatureProvenanceStatus.MALFORMED_PAYLOAD,
-                reason = "Glassnode netFlowBtc is non-finite: ${latest.netFlowBtc}"
+                reason = "Glassnode netFlowBtc is non-finite: ${latest.netFlowBtc}",
+                sourceTimestampMs = latest.timestampMs,
+                retrievalTimestampMs = nowMs
             )
         }
 
@@ -308,6 +317,7 @@ open class GlassnodeEntityFlowFeature(
                         )
                     }
 
+                    latestFetchedObservations = observations
                     calculateFromObservations(observations, nowMs)
                 }
             } catch (e: Exception) {
