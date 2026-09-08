@@ -94,12 +94,17 @@ fun EngineRoomTab(
             KalshiOrderBookVerificationCard(engineState = engineState)
         }
 
-        // 7. Data-Derived Trader Market Structure
+        // 7. Approved External Research Telemetry (Connection Status, Freshness & Provenance)
+        item {
+            ExternalResearchTelemetryCard(engineState = engineState)
+        }
+
+        // 8. Data-Derived Trader Market Structure
         item {
             MarketStructureCard(engineState = engineState)
         }
 
-        // 8. 15-Minute Spot Market Price Context
+        // 9. 15-Minute Spot Market Price Context
         item {
             Btc15MinMarketChart(engineState = engineState)
         }
@@ -694,4 +699,202 @@ fun KalshiOrderBookVerificationCard(engineState: EngineState) {
         }
     }
 }
+
+/**
+ * Approved External Research Telemetry Card.
+ * Transparently displays connection status, freshness, data-quality provenance, and values
+ * for approved external research sources (TradingView, CryptoQuant, Glassnode, CoinGlass).
+ */
+@Composable
+fun ExternalResearchTelemetryCard(engineState: EngineState) {
+    val research = engineState.externalResearchFeatures
+    val tv = research?.tradingViewTrendScore
+    val cq = research?.cryptoQuantWhaleMomentum
+    val gn = research?.glassnodeEntityFlowDirection
+    val cgRisk = research?.coinGlassLiquidationRisk
+    val cgDir = research?.coinGlassLiquidationDirection
+
+    val activeCount = research?.activeAvailableCount ?: 0
+    val nowMs = if (engineState.latestTimestamp > 0) engineState.latestTimestamp else System.currentTimeMillis()
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0C1322)),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(12.dp))
+            .testTag("external_research_telemetry_card")
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Hub,
+                        contentDescription = null,
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "APPROVED RESEARCH TELEMETRY",
+                        color = Color(0xFF00E5FF),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (activeCount > 0) Color(0xFF00E676).copy(alpha = 0.15f) else Color(0xFF1E293B))
+                        .border(1.dp, if (activeCount > 0) Color(0xFF00E676).copy(alpha = 0.5f) else Color(0xFF334155), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "$activeCount/4 SOURCES ACTIVE",
+                        color = if (activeCount > 0) Color(0xFF00E676) else Color(0xFF94A3B8),
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Decoupled 30s background cadence • Strict fail-closed provenance • Zero lookahead",
+                color = Color(0xFF64748B),
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            ResearchSourceRow(
+                sourceName = "TradingView",
+                metricName = "Technical Consensus (Trend Score)",
+                feature = tv,
+                nowMs = nowMs
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            ResearchSourceRow(
+                sourceName = "CryptoQuant",
+                metricName = "Whale Exchange Flow Momentum",
+                feature = cq,
+                nowMs = nowMs
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            ResearchSourceRow(
+                sourceName = "Glassnode",
+                metricName = "Entity Inflow/Outflow Direction",
+                feature = gn,
+                nowMs = nowMs
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            ResearchSourceRow(
+                sourceName = "CoinGlass",
+                metricName = "Liquidation Cluster Density & Risk",
+                feature = cgRisk,
+                secondaryFeature = cgDir,
+                nowMs = nowMs
+            )
+        }
+    }
+}
+
+@Composable
+fun ResearchSourceRow(
+    sourceName: String,
+    metricName: String,
+    feature: com.example.engine.external.ResearchFeatureValue?,
+    secondaryFeature: com.example.engine.external.ResearchFeatureValue? = null,
+    nowMs: Long
+) {
+    val isAvail = feature?.isAvailable == true
+    val status = feature?.provenance?.provenanceStatus
+    val sourceTime = feature?.provenance?.sourceTimestampMs ?: 0L
+    val freshnessSec = if (sourceTime > 0L) ((nowMs - sourceTime) / 1000L).coerceAtLeast(0L) else null
+
+    val statusColor = when {
+        isAvail -> Color(0xFF00E676)
+        status == com.example.engine.external.ExternalFeatureProvenanceStatus.MISSING_CREDENTIALS -> Color(0xFFFFD600)
+        status == com.example.engine.external.ExternalFeatureProvenanceStatus.STALE_DATA -> Color(0xFFFF9100)
+        else -> Color(0xFF64748B)
+    }
+
+    val statusText = when {
+        isAvail -> "LIVE (${freshnessSec ?: 0}s)"
+        status == com.example.engine.external.ExternalFeatureProvenanceStatus.MISSING_CREDENTIALS -> "NEEDS KEY"
+        status == com.example.engine.external.ExternalFeatureProvenanceStatus.STALE_DATA -> "STALE (${freshnessSec ?: 0}s)"
+        status != null -> status.name.take(12)
+        else -> "UNAVAILABLE"
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xFF080D1A))
+            .border(1.dp, Color(0xFF152238), RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = sourceName,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "• $metricName",
+                    color = Color(0xFF64748B),
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+            val valueText = if (isAvail && feature?.normalizedValue != null) {
+                val primaryVal = String.format(Locale.US, "%.3f", feature.normalizedValue)
+                val secVal = if (secondaryFeature?.isAvailable == true && secondaryFeature.normalizedValue != null) {
+                    " (Dir: ${String.format(Locale.US, "%.2f", secondaryFeature.normalizedValue)})"
+                } else ""
+                "Val: $primaryVal$secVal"
+            } else {
+                "Fail-Closed: Excluded from calculation"
+            }
+            Text(
+                text = valueText,
+                color = if (isAvail) Color(0xFF38BDF8) else Color(0xFF475569),
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .background(statusColor.copy(alpha = 0.12f))
+                .border(1.dp, statusColor.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        ) {
+            Text(
+                text = statusText,
+                color = statusColor,
+                fontSize = 8.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
 
