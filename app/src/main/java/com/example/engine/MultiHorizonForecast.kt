@@ -3,23 +3,20 @@ package com.example.engine
 import com.example.engine.external.ExternalPredictionFeatures
 
 /**
- * Standard supported multi-horizon forecast durations.
- * Defined per quantitative specifications:
- * 5s, 10s, 30s, 60s, 90s, 120s, 180s, 240s, 300s, 600s, 900s, 1200s.
+ * Canonical supported multi-horizon forecast durations.
+ * Defined strictly per quantitative specifications:
+ * 5s, 10s, 30s, 60s, 120s, 300s, 600s, 900s.
+ * Obsolete horizons (90s, 180s, 240s, 1200s) deleted.
  */
 enum class PredictionHorizon(val seconds: Int, val description: String) {
     H_5S(5, "5-Second Micro Scalp"),
     H_10S(10, "10-Second Fast Scalp"),
-    H_30S(30, "30-Second Primary Baseline (v1 Frozen)"),
+    H_30S(30, "30-Second Primary Baseline"),
     H_60S(60, "60-Second Trend"),
-    H_90S(90, "90-Second Extended Scalp"),
     H_120S(120, "120-Second Short Swing"),
-    H_180S(180, "180-Second Intermediate Momentum"),
-    H_240S(240, "240-Second Channel Progression"),
     H_300S(300, "300-Second 5-Minute Structure"),
     H_600S(600, "600-Second 10-Minute Macro Regime"),
-    H_900S(900, "900-Second 15-Minute Contract Target"),
-    H_1200S(1200, "1200-Second 20-Minute Macro Trend");
+    H_900S(900, "900-Second 15-Minute Contract Target");
 
     companion object {
         val ALL_HORIZONS: List<PredictionHorizon> = values().toList()
@@ -43,8 +40,8 @@ data class HorizonProvenance(
 
 /**
  * An independent econometric forecast for a specific time horizon.
- * Each horizon possesses its own distinct factor weights, forecast timestamp,
- * price projection dynamics, and later independent outcome resolution.
+ * Each horizon possesses its own distinct data-learned parameters, forecast timestamp,
+ * price projection dynamics, uncertainty metrics, and later independent outcome resolution.
  */
 data class HorizonForecast(
     val horizonSeconds: Int,
@@ -59,7 +56,13 @@ data class HorizonForecast(
     val settlementReference: Double,
     val featureSnapshot: IndicatorSnapshot,
     val provenance: HorizonProvenance,
+    val predictedReturn: Double = 0.0,
+    val uncertainty: Double = 0.0,
+    val standardizedScore: Double = 0.0,
+    val direction: String = decision,
+    val eligibility: String = "ELIGIBLE",
     var actualPrice: Double? = null,
+    var actualReturn: Double? = null,
     var result: String? = null, // "CORRECT", "INCORRECT", "TIE", "UNRESOLVED", "PENDING"
     var resolvedTimestamp: Long? = null
 )

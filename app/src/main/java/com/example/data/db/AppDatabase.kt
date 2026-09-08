@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         KalshiOrderRecordEntity::class,
         RealizedProfitLedgerEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -116,6 +116,93 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Drop obsolete 90s columns from predictions table
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS predictions_new (
+                        predictionId TEXT NOT NULL PRIMARY KEY,
+                        timestamp INTEGER NOT NULL,
+                        decision TEXT NOT NULL,
+                        score REAL NOT NULL,
+                        strength TEXT NOT NULL,
+                        currentPrice REAL NOT NULL,
+                        predictedPrice REAL NOT NULL,
+                        predictionHorizon INTEGER NOT NULL,
+                        maturityTimestamp INTEGER NOT NULL,
+                        actualPrice REAL,
+                        result TEXT,
+                        calibratedScore REAL,
+                        ema9 REAL NOT NULL,
+                        ema21 REAL NOT NULL,
+                        rsi REAL NOT NULL,
+                        momentum REAL NOT NULL,
+                        velocity REAL NOT NULL,
+                        acceleration REAL NOT NULL,
+                        volatility REAL NOT NULL,
+                        volume REAL NOT NULL DEFAULT 0.0,
+                        volumeChange REAL NOT NULL,
+                        buffer REAL NOT NULL,
+                        bidAskSpread REAL NOT NULL DEFAULT 0.0,
+                        exchangeAgreement TEXT NOT NULL DEFAULT 'STRONG_AGREEMENT',
+                        formulaDisplay TEXT NOT NULL,
+                        settlementReference REAL NOT NULL DEFAULT 0.0,
+                        settlementMethodology TEXT NOT NULL DEFAULT '15M_ROLLING_WINDOW',
+                        actualPrice30s REAL,
+                        result30s TEXT,
+                        sourceExchange TEXT NOT NULL DEFAULT 'CONSOLIDATED_USD',
+                        marketTimestamp INTEGER NOT NULL DEFAULT 0,
+                        kalshiContractTicker TEXT,
+                        strikePrice REAL,
+                        kalshiOrderId TEXT,
+                        kalshiOrderStatus TEXT,
+                        kalshiFilledCount INTEGER,
+                        kalshiOrderPrice INTEGER,
+                        executionPrice REAL,
+                        sourceInstrument TEXT NOT NULL DEFAULT 'BTC-USD',
+                        localReceiptTimestamp INTEGER NOT NULL DEFAULT 0,
+                        marketDataUsed TEXT NOT NULL DEFAULT '',
+                        eligibilityState TEXT NOT NULL DEFAULT 'ELIGIBLE',
+                        noTradeReason TEXT,
+                        kalshiClientOrderId TEXT,
+                        resolutionTimestamp INTEGER,
+                        resolutionNotes TEXT
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    INSERT INTO predictions_new (
+                        predictionId, timestamp, decision, score, strength, currentPrice, predictedPrice,
+                        predictionHorizon, maturityTimestamp, actualPrice, result, calibratedScore,
+                        ema9, ema21, rsi, momentum, velocity, acceleration, volatility, volume,
+                        volumeChange, buffer, bidAskSpread, exchangeAgreement, formulaDisplay,
+                        settlementReference, settlementMethodology, actualPrice30s, result30s,
+                        sourceExchange, marketTimestamp, kalshiContractTicker, strikePrice,
+                        kalshiOrderId, kalshiOrderStatus, kalshiFilledCount, kalshiOrderPrice,
+                        executionPrice, sourceInstrument, localReceiptTimestamp, marketDataUsed,
+                        eligibilityState, noTradeReason, kalshiClientOrderId, resolutionTimestamp, resolutionNotes
+                    )
+                    SELECT 
+                        predictionId, timestamp, decision, score, strength, currentPrice, predictedPrice,
+                        predictionHorizon, maturityTimestamp, actualPrice, result, calibratedScore,
+                        ema9, ema21, rsi, momentum, velocity, acceleration, volatility, volume,
+                        volumeChange, buffer, bidAskSpread, exchangeAgreement, formulaDisplay,
+                        settlementReference, settlementMethodology, actualPrice30s, result30s,
+                        sourceExchange, marketTimestamp, kalshiContractTicker, strikePrice,
+                        kalshiOrderId, kalshiOrderStatus, kalshiFilledCount, kalshiOrderPrice,
+                        executionPrice, sourceInstrument, localReceiptTimestamp, marketDataUsed,
+                        eligibilityState, noTradeReason, kalshiClientOrderId, resolutionTimestamp, resolutionNotes
+                    FROM predictions
+                """.trimIndent())
+
+                db.execSQL("DROP TABLE predictions")
+                db.execSQL("ALTER TABLE predictions_new RENAME TO predictions")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_predictions_timestamp ON predictions(timestamp)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_predictions_maturityTimestamp ON predictions(maturityTimestamp)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_predictions_result ON predictions(result)")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -123,7 +210,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "qty_telemetry_database.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .fallbackToDestructiveMigrationOnDowngrade(dropAllTables = true)
                     .build()

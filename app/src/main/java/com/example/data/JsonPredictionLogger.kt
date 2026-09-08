@@ -53,8 +53,6 @@ class JsonPredictionLogger(
         predictionId: String,
         actualPrice: Double?,
         result: String,
-        actualPrice90s: Double? = null,
-        result90s: String? = null,
         kalshiTicker: String? = null,
         kalshiOrderId: String? = null,
         kalshiOrderStatus: String? = null,
@@ -68,8 +66,6 @@ class JsonPredictionLogger(
             rec.actualPrice30s = actualPrice
             rec.result = result
             rec.result30s = result
-            if (actualPrice90s != null) rec.actualPrice90s = actualPrice90s
-            if (result90s != null) rec.result90s = result90s
             if (kalshiTicker != null) rec.kalshiContractTicker = kalshiTicker
             if (kalshiOrderId != null) rec.kalshiOrderId = kalshiOrderId
             if (kalshiOrderStatus != null) rec.kalshiOrderStatus = kalshiOrderStatus
@@ -104,14 +100,9 @@ class JsonPredictionLogger(
         obj.put("actualPrice", record.actualPrice ?: JSONObject.NULL)
         obj.put("result", record.result ?: "PENDING")
 
-        // 30s & 90s dual horizon tracking
+        // 30s evaluation tracking
         obj.put("actualPrice30s", record.actualPrice30s ?: JSONObject.NULL)
         obj.put("result30s", record.result30s ?: "PENDING")
-        obj.put("projectedPrice90s", record.projectedPrice90s)
-        obj.put("projectedDecision90s", record.projectedDecision90s)
-        obj.put("maturityTimestamp90s", record.maturityTimestamp90s)
-        obj.put("actualPrice90s", record.actualPrice90s ?: JSONObject.NULL)
-        obj.put("result90s", record.result90s ?: "PENDING")
 
         // Kalshi order & execution details
         obj.put("kalshiContractTicker", record.kalshiContractTicker ?: JSONObject.NULL)

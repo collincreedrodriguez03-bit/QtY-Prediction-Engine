@@ -158,41 +158,17 @@ class PerformanceTracker {
             }
         }
 
-        // 2. Resolve authorized 90-second prediction and extended multi-horizon forecasts on resolved history
+        // 2. Resolve extended canonical multi-horizon forecasts on resolved history
         for (record in resolvedPredictions) {
             resolveRecordHorizons(record, currentPrice, currentTimestamp, priceHistory)
-
-            // Never evaluate prematurely before 90s maturity
-            if (currentTimestamp >= record.maturityTimestamp90s && record.result90s == null) {
-                val eligible90s = priceHistory?.filter { it.timestamp in record.timestamp..currentTimestamp }
-                val exactPoint90s = eligible90s?.find { it.timestamp == record.maturityTimestamp90s }
-
-                if (exactPoint90s != null || currentTimestamp == record.maturityTimestamp90s) {
-                    val observationPrice90s = exactPoint90s?.price ?: currentPrice
-                    record.actualPrice90s = observationPrice90s
-                    val delta90s = observationPrice90s - record.settlementReference
-                    record.result90s = when (record.projectedDecision90s) {
-                        "UP" -> if (delta90s > 0.0) "CORRECT" else "INCORRECT"
-                        "DOWN" -> if (delta90s < 0.0) "CORRECT" else "INCORRECT"
-                        else -> "NO-TRADE"
-                    }
-                } else {
-                    // Rule 7 & 8: If exact 90s observation is unavailable, mark UNRESOLVED without substituting another timestamp
-                    record.actualPrice90s = null
-                    record.result90s = "UNRESOLVED"
-                }
-
-                if (!newlyResolved.contains(record)) {
-                    newlyResolved.add(record)
-                }
-            }
         }
 
         return newlyResolved
     }
 
     /**
-     * Resolves individual multi-horizon forecasts with strict no-lookahead enforcement.
+     * Resolves individual canonical multi-horizon forecasts with strict no-lookahead enforcement.
+     * Computes real horizon targets: actualPrice and actualReturn_h = ln(P[t+h] / P[t]).
      */
     private fun resolveRecordHorizons(
         record: PredictionRecord,
@@ -209,6 +185,7 @@ class PerformanceTracker {
                     if (exactPoint != null || currentTimestamp == forecast.maturityTimestamp) {
                         val obsPrice = exactPoint?.price ?: currentPrice
                         forecast.actualPrice = obsPrice
+                        forecast.actualReturn = if (record.currentPrice > 0.0) kotlin.math.ln(obsPrice / record.currentPrice) else 0.0
                         forecast.resolvedTimestamp = currentTimestamp
                         val delta = obsPrice - forecast.settlementReference
                         forecast.result = when (forecast.decision) {
@@ -218,6 +195,7 @@ class PerformanceTracker {
                         }
                     } else {
                         forecast.actualPrice = null
+                        forecast.actualReturn = null
                         forecast.resolvedTimestamp = currentTimestamp
                         forecast.result = "UNRESOLVED"
                     }

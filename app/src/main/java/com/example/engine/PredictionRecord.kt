@@ -49,14 +49,9 @@ data class PredictionRecord(
     val calibratedScore: Double? = null,
     var actualPrice: Double? = null,
     var result: String? = null, // "CORRECT" | "INCORRECT" | "TIE" | "UNRESOLVED" | "PENDING"
-    val projectedPrice90s: Double = predictedPrice,
-    val projectedDecision90s: String = decision,
-    // Dedicated 30-second and 90-second resolution evaluation fields
+    // Dedicated 30-second resolution evaluation fields
     var actualPrice30s: Double? = null,
     var result30s: String? = null,
-    val maturityTimestamp90s: Long = timestamp + 90_000L,
-    var actualPrice90s: Double? = null,
-    var result90s: String? = null,
     // Source / exchange provenance and market timestamp
     val sourceExchange: String = "CONSOLIDATED_USD",
     val marketTimestamp: Long = timestamp,

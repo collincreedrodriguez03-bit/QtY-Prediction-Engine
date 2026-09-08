@@ -269,7 +269,7 @@ class KalshiAutomationEngine(
 
             appendLog(
                 "Submitting $targetSide ($displaySide) order on ${targetMarket.ticker} for $orderCount contract(s) @ ${executablePriceCents}¢ " +
-                "(QtY 30s: ${prediction.decision} -> ${prediction.predictedPrice}, 90s: ${prediction.projectedDecision90s} -> ${prediction.projectedPrice90s})"
+                "(QtY 30s: ${prediction.decision} -> ${prediction.predictedPrice})"
             )
 
             // Submit order via official Kalshi API client (DO NOT mark traded before confirmation - Requirement 8)

@@ -240,8 +240,6 @@ class EngineLoop(
                 predictionId = resolved.predictionId,
                 actualPrice = resPrice,
                 result = resResult,
-                actualPrice90s = resolved.actualPrice90s,
-                result90s = resolved.result90s,
                 kalshiTicker = resolved.kalshiContractTicker,
                 kalshiOrderId = resolved.kalshiOrderId,
                 kalshiOrderStatus = resolved.kalshiOrderStatus,

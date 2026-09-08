@@ -108,9 +108,9 @@ object KalshiOrderBookVerifier {
 
         val marketProbability = yesMid?.let { it / 100.0 }
 
-        // 3. Compare with QtY's existing 30s and 90s predictions
+        // 3. Compare with QtY's existing 30s and 60s predictions
         val pred30s = prediction?.decision ?: "NO-TRADE"
-        val pred90s = prediction?.projectedDecision90s ?: "NO-TRADE"
+        val pred90s = prediction?.horizonForecasts?.find { it.horizonSeconds == 60 }?.decision ?: "NO-TRADE"
 
         val agreement30s = when {
             marketBias == "UNAVAILABLE" -> "UNCONFIRMED"

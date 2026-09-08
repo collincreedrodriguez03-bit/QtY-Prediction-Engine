@@ -541,7 +541,7 @@ class ExternalPredictionFeaturesTest {
         assertEquals(0.0, report.currentProductionWeight, 0.0) // Production weight MUST BE 0.0
         assertTrue("Unproven feature must be REJECTED", report.finalStatus.contains("REJECTED"))
         assertEquals("REJECT", report.result30s.recommendation)
-        assertEquals("REJECT", report.result90s.recommendation)
+        assertEquals("REJECT", report.result60s.recommendation)
     }
 
     // ==========================================
@@ -605,7 +605,6 @@ class ExternalPredictionFeaturesTest {
         assertEquals(recWithout.score, recWith.score, 0.0001)
         assertEquals(recWithout.decision, recWith.decision)
         assertEquals(recWithout.predictedPrice, recWith.predictedPrice, 0.01)
-        assertEquals(recWithout.projectedDecision90s, recWith.projectedDecision90s)
         assertEquals(recWithout.inputs.formulaDisplay, recWith.inputs.formulaDisplay)
     }
 

@@ -264,28 +264,7 @@ class Backtester(
                 }
             }
 
-            // 90-second resolution if forward observations exist
-            val futureIndex90s = i + 45
-            if (futureIndex90s < validPrices.size) {
-                val futurePrice90s = validPrices[futureIndex90s].price
-                prediction.actualPrice90s = futurePrice90s
-                val delta90s = futurePrice90s - prediction.settlementReference
-                prediction.result90s = when (prediction.projectedDecision90s) {
-                    "UP" -> when {
-                        delta90s > 0.0 -> "CORRECT"
-                        delta90s < 0.0 -> "INCORRECT"
-                        else -> "TIE"
-                    }
-                    "DOWN" -> when {
-                        delta90s < 0.0 -> "CORRECT"
-                        delta90s > 0.0 -> "INCORRECT"
-                        else -> "TIE"
-                    }
-                    else -> "NO-TRADE"
-                }
-            }
-
-            // Resolve each supported horizon independently
+            // Resolve each canonical horizon independently (Zero 30s-to-90s scaling)
             for (forecast in prediction.horizonForecasts) {
                 val hSec = forecast.horizonSeconds
                 val hSteps = maxOf(1, hSec / 2)
@@ -296,6 +275,7 @@ class Backtester(
                     if (hIdx < validPrices.size) {
                         val hFuturePrice = validPrices[hIdx].price
                         forecast.actualPrice = hFuturePrice
+                        forecast.actualReturn = if (point.price > 0.0) kotlin.math.ln(hFuturePrice / point.price) else 0.0
                         forecast.resolvedTimestamp = validPrices[hIdx].timestamp
                         val hDelta = hFuturePrice - forecast.settlementReference
                         val hResult = when (forecast.decision) {

@@ -97,14 +97,11 @@ class MultiHorizonForecastVisualizationTest {
         for (config in IMMEDIATE_SCALP_HORIZONS) {
             val forecast = resolveTruthfulForecast(
                 engineState = engineState,
-                horizonSec = config.seconds,
-                currentPrice = currentPrice,
-                snapshot = snapshot,
-                nowMs = timestamp,
-                settlementRef = settlementRef
+                horizonSec = config.seconds
             )
 
-            assertEquals(config.seconds, forecast.horizonSeconds)
+            assertNotNull(forecast)
+            assertEquals(config.seconds, forecast!!.horizonSeconds)
             assertEquals("Forecast current price must match authentic spot price", currentPrice, forecast.currentPrice, 1e-4)
             assertEquals("Forecast must target exact future maturity timestamp", timestamp + config.seconds * 1000L, forecast.maturityTimestamp)
             assertTrue("Forecast price must be positive and non-zero", forecast.predictedPrice > 0.0)
@@ -115,14 +112,11 @@ class MultiHorizonForecastVisualizationTest {
         for (config in EXTENDED_FORECAST_HORIZONS) {
             val forecast = resolveTruthfulForecast(
                 engineState = engineState,
-                horizonSec = config.seconds,
-                currentPrice = currentPrice,
-                snapshot = snapshot,
-                nowMs = timestamp,
-                settlementRef = settlementRef
+                horizonSec = config.seconds
             )
 
-            assertEquals(config.seconds, forecast.horizonSeconds)
+            assertNotNull(forecast)
+            assertEquals(config.seconds, forecast!!.horizonSeconds)
             assertEquals("Forecast current price must match authentic spot price", currentPrice, forecast.currentPrice, 1e-4)
             assertEquals("Forecast must target exact future maturity timestamp", timestamp + config.seconds * 1000L, forecast.maturityTimestamp)
             assertTrue("Forecast price must be positive and non-zero", forecast.predictedPrice > 0.0)

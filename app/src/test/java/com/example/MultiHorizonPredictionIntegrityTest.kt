@@ -63,8 +63,8 @@ class MultiHorizonPredictionIntegrityTest {
             settlementReference = 89980.0
         )
 
-        val expectedSeconds = listOf(5, 10, 30, 60, 90, 120, 180, 240, 300, 600, 900, 1200)
-        assertEquals("Must generate exactly 12 horizons", 12, record.horizonForecasts.size)
+        val expectedSeconds = listOf(5, 10, 30, 60, 120, 300, 600, 900)
+        assertEquals("Must generate exactly 8 horizons", 8, record.horizonForecasts.size)
 
         val actualSeconds = record.horizonForecasts.map { it.horizonSeconds }
         assertEquals(expectedSeconds, actualSeconds)
@@ -85,7 +85,7 @@ class MultiHorizonPredictionIntegrityTest {
                 assertEquals("v1.0-frozen-30s", forecast.modelVersion)
                 assertFalse("30s primary prediction is not advisory", forecast.provenance.isResearchAdvisory)
             } else {
-                assertEquals("v1.0-research-horizon-${forecast.horizonSeconds}s", forecast.modelVersion)
+                assertEquals("v2.0-canonical-horizon-${forecast.horizonSeconds}s", forecast.modelVersion)
                 assertTrue("Non-30s horizons must be marked advisory research", forecast.provenance.isResearchAdvisory)
             }
         }
@@ -251,11 +251,11 @@ class MultiHorizonPredictionIntegrityTest {
         assertEquals("60s forecast must resolve at T+60s", 90070.0, h60.actualPrice)
         assertEquals("CORRECT", h60.result)
 
-        // Verify missing observation rule: 90s has no observation at 190_000L
-        tracker.resolveMatured(currentPrice = 90090.0, currentTimestamp = 200_000L, priceHistory = history)
-        val h90 = record.getForecast(90)!!
-        assertNull("Missing observation must not substitute other data", h90.actualPrice)
-        assertEquals("Missing observation must mark UNRESOLVED", "UNRESOLVED", h90.result)
+        // Verify missing observation rule: 120s has no observation at 220_000L
+        tracker.resolveMatured(currentPrice = 90090.0, currentTimestamp = 230_000L, priceHistory = history)
+        val h120 = record.getForecast(120)!!
+        assertNull("Missing observation must not substitute other data", h120.actualPrice)
+        assertEquals("Missing observation must mark UNRESOLVED", "UNRESOLVED", h120.result)
     }
 
     @Test
@@ -301,7 +301,7 @@ class MultiHorizonPredictionIntegrityTest {
         assertEquals(100.0, stats5s.winRate, 1e-6)
 
         val allStats = tracker.getAllHorizonStats()
-        assertEquals(12, allStats.size)
+        assertEquals(8, allStats.size)
         assertEquals(PredictionHorizon.ALL_SECONDS, allStats.map { it.horizonSeconds })
     }
 
@@ -324,7 +324,7 @@ class MultiHorizonPredictionIntegrityTest {
 
         // Check research features are attached without mutating core v1 production weights
         assertNotNull(prediction.researchExternalFeatures)
-        assertEquals(12, prediction.horizonForecasts.size)
+        assertEquals(8, prediction.horizonForecasts.size)
 
         val state = loop.state.value
         assertNotNull("EngineState must receive external research features in processPricePoint", state.externalResearchFeatures)

@@ -209,8 +209,6 @@ class FinalExecutionGateTest {
             currentPrice = btcPrice,
             predictedPrice = btcPrice + 10.0,
             settlementReference = btcPrice,
-            projectedDecision90s = "UP",
-            projectedPrice90s = btcPrice + 10.0,
             timestamp = now
         )
 
@@ -252,8 +250,6 @@ class FinalExecutionGateTest {
             currentPrice = btcPrice,
             predictedPrice = btcPrice + 100.0,
             settlementReference = btcPrice,
-            projectedDecision90s = "UP",
-            projectedPrice90s = btcPrice + 100.0,
             timestamp = now
         )
 

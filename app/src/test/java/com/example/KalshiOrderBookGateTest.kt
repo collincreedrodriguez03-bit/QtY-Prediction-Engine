@@ -291,8 +291,6 @@ class KalshiOrderBookGateTest {
             predictedPrice = btcPrice + 100.0,
             currentPrice = btcPrice,
             settlementReference = btcPrice,
-            projectedPrice90s = btcPrice + 150.0,
-            projectedDecision90s = "UP",
             timestamp = now
         )
 

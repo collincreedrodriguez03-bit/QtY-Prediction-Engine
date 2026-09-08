@@ -53,13 +53,8 @@ class PredictionLineageReconstructionTest {
             calibratedScore = 0.725,
             actualPrice = 91390.0,
             result = "CORRECT",
-            projectedPrice90s = 91490.0,
-            projectedDecision90s = "UP",
             actualPrice30s = 91390.0,
             result30s = "CORRECT",
-            maturityTimestamp90s = origTimestamp + 90_000L,
-            actualPrice90s = 91510.0,
-            result90s = "CORRECT",
             sourceExchange = "COINBASE_PRO",
             marketTimestamp = origTimestamp - 50L,
             kalshiContractTicker = "KXBTCD-24MAY06-T91250",
@@ -90,11 +85,6 @@ class PredictionLineageReconstructionTest {
         assertEquals(originalRecord.calibratedScore, entity.calibratedScore)
         assertEquals(originalRecord.actualPrice, entity.actualPrice)
         assertEquals(originalRecord.result, entity.result)
-        assertEquals(originalRecord.projectedPrice90s, entity.projectedPrice90s, 1e-6)
-        assertEquals(originalRecord.projectedDecision90s, entity.projectedDecision90s)
-        assertEquals(originalRecord.maturityTimestamp90s, entity.maturityTimestamp90s)
-        assertEquals(originalRecord.actualPrice90s, entity.actualPrice90s)
-        assertEquals(originalRecord.result90s, entity.result90s)
         assertEquals(originalRecord.actualPrice30s, entity.actualPrice30s)
         assertEquals(originalRecord.result30s, entity.result30s)
         assertEquals(originalRecord.sourceExchange, entity.sourceExchange)
@@ -141,11 +131,6 @@ class PredictionLineageReconstructionTest {
         assertEquals(originalRecord.calibratedScore, reconstructed.calibratedScore)
         assertEquals(originalRecord.actualPrice, reconstructed.actualPrice)
         assertEquals(originalRecord.result, reconstructed.result)
-        assertEquals(originalRecord.projectedPrice90s, reconstructed.projectedPrice90s, 1e-6)
-        assertEquals(originalRecord.projectedDecision90s, reconstructed.projectedDecision90s)
-        assertEquals(originalRecord.maturityTimestamp90s, reconstructed.maturityTimestamp90s)
-        assertEquals(originalRecord.actualPrice90s, reconstructed.actualPrice90s)
-        assertEquals(originalRecord.result90s, reconstructed.result90s)
         assertEquals(originalRecord.actualPrice30s, reconstructed.actualPrice30s)
         assertEquals(originalRecord.result30s, reconstructed.result30s)
         assertEquals(originalRecord.sourceExchange, reconstructed.sourceExchange)

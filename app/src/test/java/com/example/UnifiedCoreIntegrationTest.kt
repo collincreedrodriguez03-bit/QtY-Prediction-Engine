@@ -195,8 +195,8 @@ class UnifiedCoreIntegrationTest {
         assertTrue("Decision must be UP, DOWN, or NO-TRADE", prediction.decision in listOf("UP", "DOWN", "NO-TRADE"))
         assertTrue("Score must be bounded between 0.0 and 1.0", prediction.score in 0.0..1.0)
 
-        // Verify Scalp Horizons (5s, 10s, 30s, 60s, 90s, 120s, 180s, 240s, 300s)
-        val scalpSeconds = listOf(5, 10, 30, 60, 90, 120, 180, 240, 300)
+        // Verify Scalp Horizons (5s, 10s, 30s, 60s, 120s, 300s)
+        val scalpSeconds = listOf(5, 10, 30, 60, 120, 300)
         for (sec in scalpSeconds) {
             val forecast = prediction.getForecast(sec)
             assertNotNull("Forecast for $sec seconds must exist", forecast)
@@ -204,8 +204,8 @@ class UnifiedCoreIntegrationTest {
             assertTrue("Horizon score must be bounded", forecast.score in 0.0..1.0)
         }
 
-        // Verify Extended Horizons (600s, 900s, 1200s)
-        val extendedSeconds = listOf(600, 900, 1200)
+        // Verify Extended Horizons (600s, 900s)
+        val extendedSeconds = listOf(600, 900)
         for (sec in extendedSeconds) {
             val forecast = prediction.getForecast(sec)
             assertNotNull("Extended forecast for $sec seconds must exist", forecast)

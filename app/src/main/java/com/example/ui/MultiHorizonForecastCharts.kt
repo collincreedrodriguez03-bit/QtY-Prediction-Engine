@@ -93,64 +93,49 @@ data class HorizonStyleConfig(
 )
 
 /**
- * TOP GRAPH — IMMEDIATE SCALP FORECAST HORIZONS:
- * 5s, 10s, 30s, 60s, 90s, 120s, 180s, 240s, 300s.
+ * TOP GRAPH — IMMEDIATE SCALP FORECAST HORIZONS (CANONICAL ONLY):
+ * 5s, 10s, 30s, 60s, 120s, 300s.
  */
 val IMMEDIATE_SCALP_HORIZONS = listOf(
     HorizonStyleConfig(5, "5s", Color(0xFF38BDF8)),                                       // Sky Blue
     HorizonStyleConfig(10, "10s", Color(0xFF06B6D4)),                                     // Cyan
-    HorizonStyleConfig(30, "30s", Color(0xFF00E676), isPrimaryBaseline = true),           // Emerald (v1 Frozen Baseline)
+    HorizonStyleConfig(30, "30s", Color(0xFF00E676), isPrimaryBaseline = true),           // Emerald (Primary Baseline)
     HorizonStyleConfig(60, "60s", Color(0xFF10B981)),                                     // Mint
-    HorizonStyleConfig(90, "90s", Color(0xFFEAB308)),                                     // Amber
     HorizonStyleConfig(120, "120s", Color(0xFFF97316)),                                   // Orange
-    HorizonStyleConfig(180, "180s", Color(0xFFEC4899)),                                   // Rose Pink
-    HorizonStyleConfig(240, "240s", Color(0xFFA855F7)),                                   // Violet/Purple
     HorizonStyleConfig(300, "300s", Color(0xFF818CF8))                                    // Indigo (5m boundary)
 )
 
 /**
- * BOTTOM GRAPH — EXTENDED FORECAST HORIZONS:
- * 30s, 60s, 180s, 300s, 600s, 900s, 1200s.
+ * BOTTOM GRAPH — EXTENDED FORECAST HORIZONS (CANONICAL ONLY):
+ * 30s, 60s, 120s, 300s, 600s, 900s.
  */
 val EXTENDED_FORECAST_HORIZONS = listOf(
     HorizonStyleConfig(30, "30s", Color(0xFF00E676), isPrimaryBaseline = true),           // Emerald (Baseline anchor)
     HorizonStyleConfig(60, "60s", Color(0xFF10B981)),                                     // Mint (1m)
-    HorizonStyleConfig(180, "180s", Color(0xFF06B6D4)),                                   // Cyan (3m)
+    HorizonStyleConfig(120, "120s", Color(0xFF06B6D4)),                                   // Cyan (2m)
     HorizonStyleConfig(300, "300s", Color(0xFF818CF8)),                                   // Indigo (5m)
     HorizonStyleConfig(600, "600s", Color(0xFFEAB308)),                                   // Amber (10m)
-    HorizonStyleConfig(900, "900s", Color(0xFFF97316), isContractTarget = true),          // Orange (15m Settlement Contract Target)
-    HorizonStyleConfig(1200, "1200s", Color(0xFFF43F5E))                                  // Coral/Rose (20m Macro Trend)
+    HorizonStyleConfig(900, "900s", Color(0xFFF97316), isContractTarget = true)           // Orange (15m Settlement Contract Target)
 )
 
 /**
- * Resolves or computes the truthful engine forecast for a given horizon.
- * Strictly adheres to non-alteration of underlying prediction mathematics.
+ * Resolves truthful engine forecast from PredictionEngine state.
+ * Mandate 9 & 10: Fail closed, single source of truth.
+ * No UI or helper may instantiate PredictionEngine or independently calculate missing forecasts.
  */
 fun resolveTruthfulForecast(
     engineState: EngineState,
-    horizonSec: Int,
-    currentPrice: Double,
-    snapshot: IndicatorSnapshot,
-    nowMs: Long,
-    settlementRef: Double
-): HorizonForecast {
-    val existing = engineState.latestPrediction?.getForecast(horizonSec)
-    if (existing != null) return existing
-    return PredictionEngine().calculateHorizonForecast(
-        horizonSeconds = horizonSec,
-        currentPrice = currentPrice,
-        snapshot = snapshot,
-        timestamp = nowMs,
-        settlementReference = settlementRef
-    )
+    horizonSec: Int
+): HorizonForecast? {
+    return engineState.latestPrediction?.getForecast(horizonSec)
 }
 
 /**
  * Multi-Horizon Forecast Workspace:
  * Presents the complete two-level forecasting visualization:
  * 1. Top Spot Telemetry & Market Structure Context
- * 2. TOP GRAPH — IMMEDIATE SCALP FORECAST (5s, 10s, 30s, 60s, 90s, 120s, 180s, 240s, 300s)
- * 3. BOTTOM GRAPH — EXTENDED FORECAST (30s, 60s, 180s, 300s, 600s, 900s, 1200s)
+ * 2. TOP GRAPH — IMMEDIATE SCALP FORECAST (5s, 10s, 30s, 60s, 120s, 300s)
+ * 3. BOTTOM GRAPH — EXTENDED FORECAST (30s, 60s, 120s, 300s, 600s, 900s)
  * 4. Outcome & Measured Operational Accuracy Strip
  */
 @Composable
@@ -181,7 +166,7 @@ fun MultiHorizonForecastWorkspace(
             ImmediateScalpForecastCard(engineState = engineState)
         }
 
-        // 4. BOTTOM GRAPH — EXTENDED FORECAST (30s to 1200s)
+        // 4. BOTTOM GRAPH — EXTENDED FORECAST (30s to 900s)
         if (viewMode == "DUAL" || viewMode == "EXTENDED_ONLY") {
             ExtendedForecastCard(engineState = engineState)
         }
@@ -359,7 +344,7 @@ fun GraphViewSelectorRow(
         val modes = listOf(
             "DUAL" to "DUAL FORECAST (ALL)",
             "SCALP_ONLY" to "IMMEDIATE SCALP (5s-300s)",
-            "EXTENDED_ONLY" to "EXTENDED (30s-1200s)"
+            "EXTENDED_ONLY" to "EXTENDED (30s-900s)"
         )
 
         modes.forEach { (modeKey, label) ->
@@ -409,26 +394,18 @@ fun ImmediateScalpForecastCard(
     engineState: EngineState,
     modifier: Modifier = Modifier
 ) {
-    val currentPrice = if (engineState.latestPrice > 0.0) engineState.latestPrice else 91250.0
+    val currentPrice = engineState.latestPrice
     val nowMs = if (engineState.latestTimestamp > 0) engineState.latestTimestamp else System.currentTimeMillis()
-    val snapshot = engineState.latestSnapshot ?: IndicatorSnapshot()
     val settlementRef = engineState.latestPrediction?.settlementReference
         ?: engineState.contractSettlementReference
         ?: engineState.rollingReferencePrice
         ?: currentPrice
 
-    // Resolve all 9 immediate scalp forecasts truthfully
+    // Resolve canonical immediate scalp forecasts truthfully
     val scalpForecasts = remember(engineState.latestPrediction, currentPrice, nowMs) {
-        IMMEDIATE_SCALP_HORIZONS.map { config ->
-            val forecast = resolveTruthfulForecast(
-                engineState = engineState,
-                horizonSec = config.seconds,
-                currentPrice = currentPrice,
-                snapshot = snapshot,
-                nowMs = nowMs,
-                settlementRef = settlementRef
-            )
-            config to forecast
+        IMMEDIATE_SCALP_HORIZONS.mapNotNull { config ->
+            val forecast = resolveTruthfulForecast(engineState, config.seconds)
+            if (forecast != null) config to forecast else null
         }
     }
 
@@ -436,11 +413,10 @@ fun ImmediateScalpForecastCard(
     val historicalPrices = remember(engineState.recentPrices, currentPrice) {
         if (engineState.recentPrices.isNotEmpty()) {
             engineState.recentPrices.takeLast(45)
+        } else if (currentPrice > 0.0) {
+            listOf(currentPrice)
         } else {
-            listOf(
-                currentPrice - 14.0, currentPrice - 18.0, currentPrice - 12.0,
-                currentPrice - 8.0, currentPrice - 4.0, currentPrice + 1.0, currentPrice
-            )
+            emptyList()
         }
     }
 
@@ -518,7 +494,7 @@ fun ImmediateScalpForecastCard(
                     }
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Horizons: 5s, 10s, 30s, 60s, 90s, 120s, 180s, 240s, 300s (5m)",
+                        text = "Horizons: 5s, 10s, 30s, 60s, 120s, 300s (5m)",
                         color = Color(0xFF94A3B8),
                         fontSize = 9.5.sp,
                         fontFamily = FontFamily.Monospace
@@ -534,7 +510,7 @@ fun ImmediateScalpForecastCard(
                         .padding(horizontal = 6.dp, vertical = 3.dp)
                 ) {
                     Text(
-                        text = "QtY Single Model • 9 Scales",
+                        text = "QtY Canonical Model • 6 Scalp Scales",
                         color = Color(0xFF38BDF8),
                         fontSize = 8.5.sp,
                         fontFamily = FontFamily.Monospace,
@@ -990,10 +966,11 @@ fun ImmediateScalpForecastCard(
 
                     drawContext.canvas.nativeCanvas.drawText("-90s", leftPad + 4f, topPad + graphH + 20f, axisPaint)
                     drawContext.canvas.nativeCanvas.drawText("NOW (t)", nowX - 25f, topPad + graphH + 20f, nowPaint)
+                    drawContext.canvas.nativeCanvas.drawText("+5s", nowX + (5f / 300f * futureW) - 10f, topPad + graphH + 20f, axisPaint)
+                    drawContext.canvas.nativeCanvas.drawText("+10s", nowX + (10f / 300f * futureW) - 12f, topPad + graphH + 20f, axisPaint)
                     drawContext.canvas.nativeCanvas.drawText("+30s", nowX + (30f / 300f * futureW) - 15f, topPad + graphH + 20f, axisPaint)
                     drawContext.canvas.nativeCanvas.drawText("+60s", nowX + (60f / 300f * futureW) - 15f, topPad + graphH + 20f, axisPaint)
                     drawContext.canvas.nativeCanvas.drawText("+120s", nowX + (120f / 300f * futureW) - 18f, topPad + graphH + 20f, axisPaint)
-                    drawContext.canvas.nativeCanvas.drawText("+180s", nowX + (180f / 300f * futureW) - 18f, topPad + graphH + 20f, axisPaint)
                     drawContext.canvas.nativeCanvas.drawText("+300s (5m)", nowX + futureW - 45f, topPad + graphH + 20f, axisPaint)
                 }
             }
@@ -1094,26 +1071,18 @@ fun ExtendedForecastCard(
     engineState: EngineState,
     modifier: Modifier = Modifier
 ) {
-    val currentPrice = if (engineState.latestPrice > 0.0) engineState.latestPrice else 91250.0
+    val currentPrice = engineState.latestPrice
     val nowMs = if (engineState.latestTimestamp > 0) engineState.latestTimestamp else System.currentTimeMillis()
-    val snapshot = engineState.latestSnapshot ?: IndicatorSnapshot()
     val settlementRef = engineState.latestPrediction?.settlementReference
         ?: engineState.contractSettlementReference
         ?: engineState.rollingReferencePrice
         ?: currentPrice
 
-    // Resolve all 7 extended forecasts truthfully
+    // Resolve canonical extended forecasts truthfully
     val extendedForecasts = remember(engineState.latestPrediction, currentPrice, nowMs) {
-        EXTENDED_FORECAST_HORIZONS.map { config ->
-            val forecast = resolveTruthfulForecast(
-                engineState = engineState,
-                horizonSec = config.seconds,
-                currentPrice = currentPrice,
-                snapshot = snapshot,
-                nowMs = nowMs,
-                settlementRef = settlementRef
-            )
-            config to forecast
+        EXTENDED_FORECAST_HORIZONS.mapNotNull { config ->
+            val forecast = resolveTruthfulForecast(engineState, config.seconds)
+            if (forecast != null) config to forecast else null
         }
     }
 
@@ -1121,12 +1090,10 @@ fun ExtendedForecastCard(
     val historicalPrices = remember(engineState.recentPrices, currentPrice) {
         if (engineState.recentPrices.isNotEmpty()) {
             engineState.recentPrices.takeLast(120)
+        } else if (currentPrice > 0.0) {
+            listOf(currentPrice)
         } else {
-            listOf(
-                currentPrice - 26.0, currentPrice - 32.0, currentPrice - 22.0,
-                currentPrice - 18.0, currentPrice - 14.0, currentPrice - 6.0,
-                currentPrice - 2.0, currentPrice + 4.0, currentPrice
-            )
+            emptyList()
         }
     }
 
@@ -1202,7 +1169,7 @@ fun ExtendedForecastCard(
                     }
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Horizons: 30s, 60s, 180s, 300s, 600s, 900s (15m), 1200s (20m)",
+                        text = "Horizons: 30s, 60s, 120s, 300s, 600s, 900s (15m)",
                         color = Color(0xFF94A3B8),
                         fontSize = 9.5.sp,
                         fontFamily = FontFamily.Monospace
@@ -1424,7 +1391,7 @@ fun ExtendedForecastCard(
                     val currentY = priceToY(currentPrice)
 
                     // 5. Extended Forecast Lines extending from (NOW, currentPrice) into future time
-                    val maxFutureSec = 1200f // 20 minutes
+                    val maxFutureSec = 900f // 15 minutes canonical contract horizon
 
                     extendedForecasts.forEachIndexed { index, (config, forecast) ->
                         val horizonProgress = (config.seconds.toFloat() / maxFutureSec).coerceIn(0f, 1f)
@@ -1519,12 +1486,12 @@ fun ExtendedForecastCard(
 
                     drawContext.canvas.nativeCanvas.drawText("-300s (5m)", leftPad + 4f, topPad + graphH + 20f, axisPaint)
                     drawContext.canvas.nativeCanvas.drawText("NOW (t)", nowX - 25f, topPad + graphH + 20f, nowPaint)
-                    drawContext.canvas.nativeCanvas.drawText("+60s", nowX + (60f / 1200f * futureW) - 12f, topPad + graphH + 20f, axisPaint)
-                    drawContext.canvas.nativeCanvas.drawText("+180s (3m)", nowX + (180f / 1200f * futureW) - 20f, topPad + graphH + 20f, axisPaint)
-                    drawContext.canvas.nativeCanvas.drawText("+300s (5m)", nowX + (300f / 1200f * futureW) - 20f, topPad + graphH + 20f, axisPaint)
-                    drawContext.canvas.nativeCanvas.drawText("+600s (10m)", nowX + (600f / 1200f * futureW) - 22f, topPad + graphH + 20f, axisPaint)
-                    drawContext.canvas.nativeCanvas.drawText("+900s (15m)", nowX + (900f / 1200f * futureW) - 24f, topPad + graphH + 20f, axisPaint)
-                    drawContext.canvas.nativeCanvas.drawText("+1200s (20m)", nowX + futureW - 48f, topPad + graphH + 20f, axisPaint)
+                    drawContext.canvas.nativeCanvas.drawText("+30s", nowX + (30f / 900f * futureW) - 10f, topPad + graphH + 20f, axisPaint)
+                    drawContext.canvas.nativeCanvas.drawText("+60s", nowX + (60f / 900f * futureW) - 12f, topPad + graphH + 20f, axisPaint)
+                    drawContext.canvas.nativeCanvas.drawText("+120s (2m)", nowX + (120f / 900f * futureW) - 16f, topPad + graphH + 20f, axisPaint)
+                    drawContext.canvas.nativeCanvas.drawText("+300s (5m)", nowX + (300f / 900f * futureW) - 20f, topPad + graphH + 20f, axisPaint)
+                    drawContext.canvas.nativeCanvas.drawText("+600s (10m)", nowX + (600f / 900f * futureW) - 22f, topPad + graphH + 20f, axisPaint)
+                    drawContext.canvas.nativeCanvas.drawText("+900s (15m)", nowX + futureW - 48f, topPad + graphH + 20f, axisPaint)
                 }
             }
 

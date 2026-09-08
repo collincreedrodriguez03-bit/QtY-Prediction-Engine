@@ -55,13 +55,13 @@ class ResearchFeatureEvaluator(
         val inSampleTotalTicks: Int,
         val outOfSampleTotalTicks: Int,
         val result30s: HorizonEvaluationResult,
-        val result90s: HorizonEvaluationResult,
+        val result60s: HorizonEvaluationResult,
         val finalStatus: String, // "REJECTED (INSUFFICIENT OOS EDGE)" or "APPROVED FOR WEIGHT ASSIGNMENT"
         val currentProductionWeight: Double = 0.0 // MUST REMAIN 0.0 until rigorous empirical verification
     )
 
     /**
-     * Evaluates a research feature across 30-second and 90-second horizons with strict 60/40 train/test split.
+     * Evaluates a research feature across 30-second and 60-second canonical horizons with strict 60/40 train/test split.
      *
      * @param featureAccessor function returning normalized research feature for each point (or null if unavailable)
      */
@@ -87,7 +87,7 @@ class ResearchFeatureEvaluator(
                 inSampleTotalTicks = 0,
                 outOfSampleTotalTicks = 0,
                 result30s = dummyHorizon,
-                result90s = dummyHorizon.copy(horizonSeconds = 90),
+                result60s = dummyHorizon.copy(horizonSeconds = 60),
                 finalStatus = "REJECTED (INSUFFICIENT DATA)",
                 currentProductionWeight = 0.0
             )
@@ -108,17 +108,17 @@ class ResearchFeatureEvaluator(
             candidateWeight = candidateProspectiveWeight
         )
 
-        // Evaluate 90-second horizon on Out-Of-Sample
-        val result90s = evaluateHorizon(
-            horizonSeconds = 90,
-            horizonSteps = 45, // 45 steps @ 2s = 90s
+        // Evaluate 60-second canonical horizon on Out-Of-Sample
+        val result60s = evaluateHorizon(
+            horizonSeconds = 60,
+            horizonSteps = 30, // 30 steps @ 2s = 60s
             allPrices = priceSeries,
             evalStartIndex = splitIndex,
             featureValues = featureValues,
             candidateWeight = candidateProspectiveWeight
         )
 
-        val bothDefensible = result30s.isStatisticallyDefensible && result90s.isStatisticallyDefensible
+        val bothDefensible = result30s.isStatisticallyDefensible && result60s.isStatisticallyDefensible
         val finalStatus = if (bothDefensible) {
             "APPROVED FOR WEIGHT ASSIGNMENT"
         } else {
@@ -130,7 +130,7 @@ class ResearchFeatureEvaluator(
             inSampleTotalTicks = splitIndex,
             outOfSampleTotalTicks = totalPoints - splitIndex,
             result30s = result30s,
-            result90s = result90s,
+            result60s = result60s,
             finalStatus = finalStatus,
             currentProductionWeight = 0.0 // CURRENT PRODUCTION WEIGHT STRICTLY REMAINS 0.0
         )
@@ -181,7 +181,7 @@ class ResearchFeatureEvaluator(
                 settlementReference = currentPrice
             )
 
-            val baseDecision = if (horizonSeconds == 90) baseRecord.projectedDecision90s else baseRecord.decision
+            val baseDecision = baseRecord.horizonForecasts.find { it.horizonSeconds == horizonSeconds }?.decision ?: baseRecord.decision
             if (baseDecision == "NO-TRADE") continue
 
             totalEligibleTrades++

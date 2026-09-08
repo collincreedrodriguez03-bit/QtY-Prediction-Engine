@@ -33,8 +33,7 @@ class ExactEvaluationTests {
         timestamp: Long,
         decision: String = "UP",
         settlementRef: Double = 90000.0,
-        currentPrice: Double = 90000.0,
-        projectedDecision90s: String = "UP"
+        currentPrice: Double = 90000.0
     ): PredictionRecord {
         return PredictionRecord(
             timestamp = timestamp,
@@ -46,9 +45,6 @@ class ExactEvaluationTests {
             predictedPrice = currentPrice + 50.0,
             predictionHorizon = 30,
             maturityTimestamp = timestamp + 30_000L,
-            maturityTimestamp90s = timestamp + 90_000L,
-            projectedPrice90s = currentPrice + 120.0,
-            projectedDecision90s = projectedDecision90s,
             inputs = IndicatorSnapshot()
         )
     }
@@ -83,47 +79,6 @@ class ExactEvaluationTests {
     }
 
     @Test
-    fun testExact90sEvaluation() {
-        val t = 100_000L
-        val rec = createRecord(
-            timestamp = t,
-            decision = "UP",
-            settlementRef = 90000.0,
-            projectedDecision90s = "DOWN"
-        )
-        tracker.registerPrediction(rec)
-
-        // Price history with points up to 200_000L
-        val history = listOf(
-            PricePoint(price = 90000.0, timestamp = 100_000L, exchange = "BINANCE"),
-            PricePoint(price = 90050.0, timestamp = 130_000L, exchange = "BINANCE"), // T+30s
-            PricePoint(price = 89920.0, timestamp = 190_000L, exchange = "BINANCE"), // authentic T+90s
-            PricePoint(price = 91000.0, timestamp = 192_000L, exchange = "BINANCE")  // later T+92s
-        )
-
-        // Cycle at T+30s resolves 30s horizon
-        val resolved30s = tracker.resolveMatured(
-            currentPrice = 90050.0,
-            currentTimestamp = 130_000L,
-            priceHistory = history
-        )
-        assertEquals(1, resolved30s.size)
-        assertEquals("CORRECT", resolved30s[0].result30s)
-        assertNull("90s should not be resolved yet at T+30s", resolved30s[0].result90s)
-
-        // Cycle at T+92s resolves 90s horizon
-        val resolved90s = tracker.resolveMatured(
-            currentPrice = 91000.0,
-            currentTimestamp = 192_000L,
-            priceHistory = history
-        )
-        assertEquals(1, resolved90s.size)
-        // MUST use authentic price at exact T+90s (89920.0 < 90000.0 -> DOWN is CORRECT)
-        assertEquals(89920.0, resolved90s[0].actualPrice90s)
-        assertEquals("CORRECT", resolved90s[0].result90s)
-    }
-
-    @Test
     fun testMissing30sObservationMarksUnresolved() {
         val t = 100_000L
         val rec = createRecord(timestamp = t, decision = "UP", settlementRef = 90000.0)
@@ -150,32 +105,6 @@ class ExactEvaluationTests {
         assertEquals("UNRESOLVED", resolved[0].result30s)
         assertNull("actualPrice must be null when UNRESOLVED", resolved[0].actualPrice)
         assertNull("actualPrice30s must be null when UNRESOLVED", resolved[0].actualPrice30s)
-    }
-
-    @Test
-    fun testMissing90sObservationMarksUnresolved() {
-        val t = 100_000L
-        val rec = createRecord(timestamp = t, decision = "UP", settlementRef = 90000.0)
-        tracker.registerPrediction(rec)
-
-        // History contains 30s observation, but exact 90s observation (190_000L) is missing
-        val history = listOf(
-            PricePoint(price = 90000.0, timestamp = 100_000L, exchange = "BINANCE"),
-            PricePoint(price = 90050.0, timestamp = 130_000L, exchange = "BINANCE"), // 30s present
-            PricePoint(price = 90060.0, timestamp = 188_000L, exchange = "BINANCE"),
-            // 190_000L missing!
-            PricePoint(price = 90100.0, timestamp = 194_000L, exchange = "BINANCE")
-        )
-
-        // Resolve 30s at 130_000L
-        tracker.resolveMatured(90050.0, 130_000L, history)
-
-        // Evaluate at 194_000L
-        val resolved90s = tracker.resolveMatured(90100.0, 194_000L, history)
-        assertEquals(1, resolved90s.size)
-        // 90s MUST be marked UNRESOLVED
-        assertEquals("UNRESOLVED", resolved90s[0].result90s)
-        assertNull("actualPrice90s must be null when UNRESOLVED", resolved90s[0].actualPrice90s)
     }
 
     @Test

@@ -56,12 +56,6 @@ data class PredictionEntity(
     // Settlement methodology & reference
     val settlementReference: Double = 0.0,
     val settlementMethodology: String = "15M_ROLLING_WINDOW",
-    // 90s projection fields
-    val projectedPrice90s: Double = 0.0,
-    val projectedDecision90s: String = "NO-TRADE",
-    val maturityTimestamp90s: Long = 0L,
-    val actualPrice90s: Double? = null,
-    val result90s: String? = null,
     // Dedicated 30s fields
     val actualPrice30s: Double? = null,
     val result30s: String? = null,
