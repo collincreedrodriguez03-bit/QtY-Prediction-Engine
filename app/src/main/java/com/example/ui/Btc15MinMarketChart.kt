@@ -141,10 +141,11 @@ fun Btc15MinMarketChart(
 
             Spacer(modifier = Modifier.height(5.dp))
 
-            // Sub-header: Range summary
+            // Sub-header: Range summary & Market Structure status
+            val marketStructure = engineState.marketStructure
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Start,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -156,6 +157,30 @@ fun Btc15MinMarketChart(
                     maxLines = 1,
                     softWrap = false
                 )
+
+                marketStructure?.let { ms ->
+                    val structLabel = when (ms.trendDirection) {
+                        com.example.engine.structure.TrendDirection.BULLISH -> "BULLISH (HH/HL)"
+                        com.example.engine.structure.TrendDirection.BEARISH -> "BEARISH (LH/LL)"
+                        com.example.engine.structure.TrendDirection.NEUTRAL_RANGE -> "RANGE"
+                        com.example.engine.structure.TrendDirection.AMBIGUOUS -> "AMBIGUOUS"
+                    }
+                    val structColor = when (ms.trendDirection) {
+                        com.example.engine.structure.TrendDirection.BULLISH -> Color(0xFF00E676)
+                        com.example.engine.structure.TrendDirection.BEARISH -> Color(0xFFFF334B)
+                        com.example.engine.structure.TrendDirection.NEUTRAL_RANGE -> Color(0xFFF59E0B)
+                        com.example.engine.structure.TrendDirection.AMBIGUOUS -> Color(0xFF94A3B8)
+                    }
+                    Text(
+                        text = "STRUCT: $structLabel",
+                        color = structColor,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -217,6 +242,70 @@ fun Btc15MinMarketChart(
                                 leftPadding + graphWidth + 5f,
                                 gridY + 6f,
                                 paint
+                            )
+                        }
+                    }
+
+                    // 1b. Support & Resistance Key Levels
+                    marketStructure?.primarySupport?.let { sup ->
+                        val supY = priceToY(sup.price)
+                        drawLine(
+                            color = Color(0xFF00E676).copy(alpha = 0.55f),
+                            start = Offset(leftPadding, supY),
+                            end = Offset(leftPadding + graphWidth, supY),
+                            strokeWidth = 1.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
+                        )
+                        val supPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.parseColor("#00E676")
+                            textSize = 16f
+                            isAntiAlias = true
+                            typeface = android.graphics.Typeface.MONOSPACE
+                        }
+                        drawContext.canvas.nativeCanvas.drawText("SUP $${String.format(Locale.US, "%,.0f", sup.price)}", leftPadding + 4f, supY - 2f, supPaint)
+                    }
+
+                    marketStructure?.primaryResistance?.let { res ->
+                        val resY = priceToY(res.price)
+                        drawLine(
+                            color = Color(0xFFFF5252).copy(alpha = 0.55f),
+                            start = Offset(leftPadding, resY),
+                            end = Offset(leftPadding + graphWidth, resY),
+                            strokeWidth = 1.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
+                        )
+                        val resPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.parseColor("#FF5252")
+                            textSize = 16f
+                            isAntiAlias = true
+                            typeface = android.graphics.Typeface.MONOSPACE
+                        }
+                        drawContext.canvas.nativeCanvas.drawText("RES $${String.format(Locale.US, "%,.0f", res.price)}", leftPadding + 4f, resY - 2f, resPaint)
+                    }
+
+                    // 1c. Mathematical Trendlines (Authentic Data-Derived)
+                    marketStructure?.supportTrendline?.let { stl ->
+                        if (stl.isValid && prices.size >= 2) {
+                            val startY = priceToY(stl.anchorPoint1.price)
+                            val endY = priceToY(stl.currentProjectedPrice)
+                            drawLine(
+                                color = Color(0xFF00E676).copy(alpha = 0.45f),
+                                start = Offset(leftPadding, startY),
+                                end = Offset(leftPadding + graphWidth, endY),
+                                strokeWidth = 1.2.dp.toPx()
+                            )
+                        }
+                    }
+
+                    marketStructure?.resistanceTrendline?.let { rtl ->
+                        if (rtl.isValid && prices.size >= 2) {
+                            val startY = priceToY(rtl.anchorPoint1.price)
+                            val endY = priceToY(rtl.currentProjectedPrice)
+                            drawLine(
+                                color = Color(0xFFFF5252).copy(alpha = 0.45f),
+                                start = Offset(leftPadding, startY),
+                                end = Offset(leftPadding + graphWidth, endY),
+                                strokeWidth = 1.2.dp.toPx()
                             )
                         }
                     }
@@ -286,6 +375,38 @@ fun Btc15MinMarketChart(
                             radius = 1.2.dp.toPx(),
                             center = Offset(lastX, lastY)
                         )
+
+                        // 2b. Swing Highs & Lows Pivot markers
+                        marketStructure?.recentSwings?.takeLast(8)?.forEach { swing ->
+                            val swingAgeMs = (engineState.latestTimestamp.takeIf { it > 0 } ?: System.currentTimeMillis()) - swing.timestamp
+                            val maxWindowMs = 15 * 60 * 1000L // 15 min
+                            if (swingAgeMs in 0..maxWindowMs) {
+                                val progress = 1.0f - (swingAgeMs.toFloat() / maxWindowMs)
+                                val sx = leftPadding + (progress * graphWidth)
+                                val sy = priceToY(swing.price)
+
+                                val isHigh = swing.type == com.example.engine.structure.SwingType.SWING_HIGH
+                                val dotColor = if (isHigh) Color(0xFFFF5252) else Color(0xFF00E676)
+
+                                drawCircle(
+                                    color = dotColor,
+                                    radius = 2.dp.toPx(),
+                                    center = Offset(sx, sy)
+                                )
+
+                                swing.sequenceLabel?.let { lbl ->
+                                    val labelPaint = android.graphics.Paint().apply {
+                                        color = if (isHigh) android.graphics.Color.parseColor("#FF6E6E") else android.graphics.Color.parseColor("#69F0AE")
+                                        textSize = 14f
+                                        isAntiAlias = true
+                                        typeface = android.graphics.Typeface.MONOSPACE
+                                        isFakeBoldText = true
+                                    }
+                                    val textY = if (isHigh) sy - 4f else sy + 12f
+                                    drawContext.canvas.nativeCanvas.drawText(lbl, sx - 6f, textY, labelPaint)
+                                }
+                            }
+                        }
                     }
 
                     // 3. Time markings

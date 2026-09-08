@@ -54,7 +54,8 @@ data class EngineState(
     val isAutomationEnabled: Boolean = false,
     val kalshiContractTicker: String? = null,
     val kalshiValidationMessage: String? = null,
-    val externalResearchFeatures: com.example.engine.external.ExternalPredictionFeatures? = null
+    val externalResearchFeatures: com.example.engine.external.ExternalPredictionFeatures? = null,
+    val marketStructure: com.example.engine.structure.MarketStructureSnapshot? = null
 )
 
 /**
@@ -73,7 +74,8 @@ class EngineLoop(
     val logger: JsonPredictionLogger = JsonPredictionLogger(),
     val repository: EngineRepository? = null,
     val kalshiAutomation: KalshiAutomationEngine? = null,
-    val externalFeatureCoordinator: com.example.engine.external.ExternalFeatureCoordinator = com.example.engine.external.ExternalFeatureCoordinator()
+    val externalFeatureCoordinator: com.example.engine.external.ExternalFeatureCoordinator = com.example.engine.external.ExternalFeatureCoordinator(),
+    val marketStructureAnalyzer: com.example.engine.structure.MarketStructureAnalyzer = com.example.engine.structure.MarketStructureAnalyzer()
 ) {
     private val scope = CoroutineScope(Dispatchers.Default)
     private var job: Job? = null
@@ -276,6 +278,13 @@ class EngineLoop(
         // Research Features: strictly evaluated in parallel without altering production model weights
         val researchFeatures = externalFeatureCoordinator.computeFeatures(allPoints, timestamp)
 
+        // 4b. [DATA-DERIVED TRADER MARKET STRUCTURE]
+        val marketStructure = marketStructureAnalyzer.analyze(
+            points = allPoints,
+            asOfTimestamp = timestamp,
+            currentSpotPrice = activePrice
+        )
+
         // 5. [WEIGH & PREDICT] Generate Directional Prediction targeting 15m Contract Settlement Reference
         val rawPrediction = predictionEngine.predict(
             currentPrice = activePrice,
@@ -287,14 +296,27 @@ class EngineLoop(
             researchFeatures = researchFeatures
         )
 
-        // FAIL CLOSED: If cross-exchange feeds severely disagree, do NOT trade
-        val prediction = if (comparison.agreementStatus == com.example.data.ExchangeAgreementStatus.DISAGREEMENT) {
-            rawPrediction.copy(
-                decision = "NO-TRADE",
-                strength = "CONFLICTED_FEEDS"
-            )
-        } else {
-            rawPrediction
+        // FAIL CLOSED: If cross-exchange feeds severely disagree or market structure is ambiguous, do NOT trade
+        val prediction = when {
+            comparison.agreementStatus == com.example.data.ExchangeAgreementStatus.DISAGREEMENT -> {
+                rawPrediction.copy(
+                    decision = "NO-TRADE",
+                    strength = "CONFLICTED_FEEDS"
+                )
+            }
+            marketStructure.isAmbiguous -> {
+                rawPrediction.copy(
+                    decision = "NO-TRADE",
+                    strength = "AMBIGUOUS_STRUCTURE"
+                )
+            }
+            marketStructure.traderLevels != null && !marketStructure.traderLevels.isViable && rawPrediction.decision != "NO-TRADE" -> {
+                rawPrediction.copy(
+                    decision = "NO-TRADE",
+                    strength = "UNFAVORABLE_STRUCTURE"
+                )
+            }
+            else -> rawPrediction
         }
 
         // 6. [RECORD & REGISTER]
@@ -366,7 +388,8 @@ class EngineLoop(
             isAutomationEnabled = kalState?.isAutomationEnabled ?: false,
             kalshiContractTicker = kalState?.activeContract?.ticker,
             kalshiValidationMessage = kalState?.contractValidationMessage,
-            externalResearchFeatures = researchFeatures
+            externalResearchFeatures = researchFeatures,
+            marketStructure = marketStructure
         )
 
         return prediction

@@ -68,6 +68,8 @@ import com.example.engine.HorizonForecast
 import com.example.engine.IndicatorSnapshot
 import com.example.engine.PredictionEngine
 import com.example.ui.marketactivity.MarketActivityBar
+import com.example.ui.structure.MarketStructureCard
+import kotlin.math.abs
 import com.example.ui.marketactivity.MarketActivityProcessor
 import com.example.ui.marketactivity.OrderFlowSummary
 import java.text.SimpleDateFormat
@@ -164,6 +166,9 @@ fun MultiHorizonForecastWorkspace(
     ) {
         // 1. Unified Telemetry Context Bar
         PrimarySpotContextCard(engineState = engineState)
+
+        // 1b. Data-Derived Trader Market Structure & Actionable Reference Levels
+        MarketStructureCard(engineState = engineState)
 
         // 2. Multi-Horizon Graph View Mode Selector
         GraphViewSelectorRow(
@@ -584,6 +589,27 @@ fun ImmediateScalpForecastCard(
                         maxP = max(maxP, forecast.predictedPrice)
                     }
 
+                    // Incorporate localized data-derived market structure key levels
+                    val marketStructure = engineState.marketStructure
+                    marketStructure?.primarySupport?.price?.let {
+                        if (abs(it - currentPrice) / currentPrice < 0.008) minP = min(minP, it)
+                    }
+                    marketStructure?.primaryResistance?.price?.let {
+                        if (abs(it - currentPrice) / currentPrice < 0.008) maxP = max(maxP, it)
+                    }
+                    marketStructure?.traderLevels?.let { tl ->
+                        if (tl.isViable && tl.tradeDirection != "NO-TRADE") {
+                            if (abs(tl.targetLevel - currentPrice) / currentPrice < 0.008) {
+                                minP = min(minP, tl.targetLevel)
+                                maxP = max(maxP, tl.targetLevel)
+                            }
+                            if (abs(tl.invalidationLevel - currentPrice) / currentPrice < 0.008) {
+                                minP = min(minP, tl.invalidationLevel)
+                                maxP = max(maxP, tl.invalidationLevel)
+                            }
+                        }
+                    }
+
                     val spread = max(10.0, maxP - minP)
                     val yMin = minP - (spread * 0.16)
                     val yMax = maxP + (spread * 0.16)
@@ -679,6 +705,99 @@ fun ImmediateScalpForecastCard(
                     }
                     drawContext.canvas.nativeCanvas.drawText("STRIKE", leftPad + graphW + 6f, strikeY - 4f, strikePaint)
 
+                    // 2b. Data-Derived Key Market Structure Support & Resistance
+                    marketStructure?.primarySupport?.let { sup ->
+                        val supY = priceToY(sup.price)
+                        drawLine(
+                            color = Color(0xFF00E676).copy(alpha = 0.65f),
+                            start = Offset(leftPad, supY),
+                            end = Offset(leftPad + graphW, supY),
+                            strokeWidth = 1.2.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+                        )
+                        val supPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.parseColor("#00E676")
+                            textSize = 17f
+                            isAntiAlias = true
+                            typeface = android.graphics.Typeface.MONOSPACE
+                        }
+                        drawContext.canvas.nativeCanvas.drawText("SUP $${String.format(Locale.US, "%,.0f", sup.price)}", leftPad + 4f, supY - 3f, supPaint)
+                    }
+
+                    marketStructure?.primaryResistance?.let { res ->
+                        val resY = priceToY(res.price)
+                        drawLine(
+                            color = Color(0xFFFF5252).copy(alpha = 0.65f),
+                            start = Offset(leftPad, resY),
+                            end = Offset(leftPad + graphW, resY),
+                            strokeWidth = 1.2.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+                        )
+                        val resPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.parseColor("#FF5252")
+                            textSize = 17f
+                            isAntiAlias = true
+                            typeface = android.graphics.Typeface.MONOSPACE
+                        }
+                        drawContext.canvas.nativeCanvas.drawText("RES $${String.format(Locale.US, "%,.0f", res.price)}", leftPad + 4f, resY - 3f, resPaint)
+                    }
+
+                    // 2c. Target & Invalidation Levels & Visual Trend Path
+                    val traderLevels = marketStructure?.traderLevels
+                    if (traderLevels != null && traderLevels.isViable && traderLevels.tradeDirection != "NO-TRADE") {
+                        val isBullish = traderLevels.tradeDirection == "UP"
+                        val targetY = priceToY(traderLevels.targetLevel)
+                        val invalY = priceToY(traderLevels.invalidationLevel)
+
+                        // Invalidation Level (Dashed red/amber line across entire graph)
+                        drawLine(
+                            color = Color(0xFFFF334B).copy(alpha = 0.75f),
+                            start = Offset(leftPad, invalY),
+                            end = Offset(leftPad + graphW, invalY),
+                            strokeWidth = 1.3.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 3f), 0f)
+                        )
+                        val invalPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.parseColor("#FF334B")
+                            textSize = 17f
+                            isAntiAlias = true
+                            typeface = android.graphics.Typeface.MONOSPACE
+                            isFakeBoldText = true
+                        }
+                        drawContext.canvas.nativeCanvas.drawText("INVAL $${String.format(Locale.US, "%,.0f", traderLevels.invalidationLevel)}", leftPad + graphW - 90f, invalY - 3f, invalPaint)
+
+                        // Target Level (Dashed green line across future section)
+                        drawLine(
+                            color = Color(0xFF00E676).copy(alpha = 0.75f),
+                            start = Offset(nowX, targetY),
+                            end = Offset(leftPad + graphW, targetY),
+                            strokeWidth = 1.3.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 3f), 0f)
+                        )
+                        val targetPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.parseColor("#00E676")
+                            textSize = 17f
+                            isAntiAlias = true
+                            typeface = android.graphics.Typeface.MONOSPACE
+                            isFakeBoldText = true
+                        }
+                        drawContext.canvas.nativeCanvas.drawText("TARGET $${String.format(Locale.US, "%,.0f", traderLevels.targetLevel)}", leftPad + graphW - 90f, targetY - 3f, targetPaint)
+
+                        // Visual Path Corridor:
+                        // "A bullish structure should visually communicate its support/trend path. A bearish structure should communicate resistance/trend path."
+                        val pathEnvelope = Path().apply {
+                            moveTo(nowX, priceToY(currentPrice))
+                            lineTo(leftPad + graphW, targetY)
+                            lineTo(leftPad + graphW, targetY + if (isBullish) 12f else -12f)
+                            lineTo(nowX, priceToY(currentPrice))
+                            close()
+                        }
+                        drawPath(
+                            path = pathEnvelope,
+                            color = if (isBullish) Color(0xFF00E676).copy(alpha = 0.08f) else Color(0xFFFF334B).copy(alpha = 0.08f)
+                        )
+                    }
+
                     // 3. Vertical Dividing Line at "NOW (t)"
                     drawLine(
                         color = Color(0xFF00E5FF).copy(alpha = 0.55f),
@@ -732,6 +851,43 @@ fun ImmediateScalpForecastCard(
                             color = Color(0xFF00E5FF),
                             style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round)
                         )
+
+                        // 4b. Swing High / Low Markers with Progression Labels (HH, HL, LH, LL)
+                        marketStructure?.recentSwings?.forEach { swing ->
+                            val swingAgeMs = nowMs - swing.timestamp
+                            val maxAgeMs = 90_000L // 90 seconds visible historical window
+                            if (swingAgeMs in 0..maxAgeMs) {
+                                val progress = 1.0f - (swingAgeMs.toFloat() / maxAgeMs)
+                                val sx = leftPad + (progress * (nowX - leftPad))
+                                val sy = priceToY(swing.price)
+
+                                val isHigh = swing.type == com.example.engine.structure.SwingType.SWING_HIGH
+                                val dotColor = if (isHigh) Color(0xFFFF5252) else Color(0xFF00E676)
+
+                                drawCircle(
+                                    color = dotColor.copy(alpha = 0.35f),
+                                    radius = 4.dp.toPx(),
+                                    center = Offset(sx, sy)
+                                )
+                                drawCircle(
+                                    color = dotColor,
+                                    radius = 2.2.dp.toPx(),
+                                    center = Offset(sx, sy)
+                                )
+
+                                swing.sequenceLabel?.let { lbl ->
+                                    val swingLabelPaint = android.graphics.Paint().apply {
+                                        color = if (isHigh) android.graphics.Color.parseColor("#FF6E6E") else android.graphics.Color.parseColor("#69F0AE")
+                                        textSize = 15f
+                                        isAntiAlias = true
+                                        typeface = android.graphics.Typeface.MONOSPACE
+                                        isFakeBoldText = true
+                                    }
+                                    val textY = if (isHigh) sy - 6f else sy + 14f
+                                    drawContext.canvas.nativeCanvas.drawText(lbl, sx - 8f, textY, swingLabelPaint)
+                                }
+                            }
+                        }
                     }
 
                     val currentY = priceToY(currentPrice)

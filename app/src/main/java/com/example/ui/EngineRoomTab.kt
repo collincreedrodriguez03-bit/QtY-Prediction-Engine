@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.EngineState
 import com.example.engine.IndicatorSnapshot
+import com.example.ui.structure.MarketStructureCard
 import java.util.Locale
 import kotlin.math.tanh
 
@@ -93,7 +94,12 @@ fun EngineRoomTab(
             KalshiOrderBookVerificationCard(engineState = engineState)
         }
 
-        // 7. 15-Minute Spot Market Price Context
+        // 7. Data-Derived Trader Market Structure
+        item {
+            MarketStructureCard(engineState = engineState)
+        }
+
+        // 8. 15-Minute Spot Market Price Context
         item {
             Btc15MinMarketChart(engineState = engineState)
         }
