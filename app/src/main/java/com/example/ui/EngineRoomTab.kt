@@ -118,7 +118,7 @@ fun EngineRoomTab(
 fun EngineRoomMathCard(engineState: EngineState) {
     val snapshot = engineState.latestSnapshot
     val prediction = engineState.latestPrediction
-    val currentPrice = if (engineState.latestPrice > 0.0) engineState.latestPrice else 91250.0
+    val currentPrice = if (engineState.latestPrice > 0.0) engineState.latestPrice else 0.0
     val score = prediction?.score ?: 0.50
     val horizon = prediction?.predictionHorizon ?: 30
     val decision = prediction?.decision ?: "NO-TRADE"

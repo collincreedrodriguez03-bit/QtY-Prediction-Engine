@@ -186,11 +186,12 @@ class FinalExecutionGateTest {
 
     @Test
     fun testGateRejectsWhenNoRequiredEdge() = runBlocking {
-        val (engine, _) = createEngineWithRealizedProfit()
-        engine.toggleAutomation(true)
+        val (engine, client) = createEngineWithRealizedProfit()
         val now = System.currentTimeMillis()
         val market = createValidMarket(now)
         val book = createValidBook(now, market.ticker)
+        client.activeContractsResult = Result.success(listOf(market))
+        engine.toggleAutomation(true)
 
         priceHistory.add(PricePoint(price = btcPrice, timestamp = now))
         engine.setStateForTesting(
@@ -227,11 +228,12 @@ class FinalExecutionGateTest {
 
     @Test
     fun testGateSubmitsWhenAllConditionsPass() = runBlocking {
-        val (engine, _) = createEngineWithRealizedProfit()
-        engine.toggleAutomation(true)
+        val (engine, client) = createEngineWithRealizedProfit()
         val now = System.currentTimeMillis()
         val market = createValidMarket(now)
         val book = createValidBook(now, market.ticker)
+        client.activeContractsResult = Result.success(listOf(market))
+        engine.toggleAutomation(true)
 
         priceHistory.add(PricePoint(price = btcPrice, timestamp = now))
         engine.setStateForTesting(

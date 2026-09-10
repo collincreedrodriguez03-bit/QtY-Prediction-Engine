@@ -172,18 +172,10 @@ class PredictionEngine(
             else -> 0.0
         }
 
-        // Adjust toward 0.5 if disagreement, or amplify away from 0.5 if strong agreement
-        val rawH30 = horizonModelEngine.compute(
-            horizonSeconds = predictionHorizonSeconds,
-            currentPrice = currentPrice,
-            snapshot = snapshot,
-            params = baselineParams
-        )
-
-        val adjustedScore = if (rawH30.score >= 0.5) {
-            (rawH30.score + agreementAdjustment).coerceIn(0.0, 1.0)
+        val adjustedScore = if (rawScore >= 0.5) {
+            (rawScore + agreementAdjustment).coerceIn(0.0, 1.0)
         } else {
-            (rawH30.score - agreementAdjustment).coerceIn(0.0, 1.0)
+            (rawScore - agreementAdjustment).coerceIn(0.0, 1.0)
         }
 
         val decision = when {
@@ -198,8 +190,9 @@ class PredictionEngine(
             else -> "WEAK"
         }
 
-        // Expected return calculation from data-learned latent state: P_t * exp(r_hat)
-        val predictedPrice = rawH30.predictedPrice
+        // Expected return calculation for primary 30s frozen baseline
+        val priceOffset = (adjustedScore - 0.5) * 2.0 * maxOf(10.0, currentPrice * 0.001)
+        val predictedPrice = currentPrice + priceOffset
 
         // Generate visual mathematics display
         val mathFormula = buildMathDisplay(
@@ -253,7 +246,8 @@ class PredictionEngine(
         sourceExchange: String = "CONSOLIDATED_USD",
         marketTimestamp: Long = timestamp
     ): HorizonForecast {
-        val params = modelRegistry.getParameters(horizonSeconds)
+        val modelVer = if (horizonSeconds == 30) "v1.0-frozen-30s" else "v2.0-canonical-horizon-${horizonSeconds}s"
+        val params = modelRegistry.getParameters(horizonSeconds).copy(modelVersion = modelVer)
         val mathFormula = "L_${horizonSeconds}s = ${params.betaEma}·z_EMA + ${params.betaRsi}·z_RSI + ${params.betaMomentum}·z_MOM + ${params.betaVelocity}·z_VEL"
 
         val provenance = HorizonProvenance(
@@ -264,6 +258,74 @@ class PredictionEngine(
             formulaDisplay = mathFormula,
             researchExternalFeatures = researchFeatures
         )
+
+        if (horizonSeconds == 30) {
+            val emaSignal = normalizeEmaSignal(currentPrice, snapshot.ema9, snapshot.ema21)
+            val rsiSignal = normalizeRsiSignal(snapshot.rsi)
+            val momSignal = normalizeMomentumSignal(snapshot.momentum, currentPrice)
+            val velSignal = normalizeVelocitySignal(snapshot.velocity, currentPrice)
+            val volSignal = normalizeVolatilitySignal(snapshot.volatility, currentPrice, emaSignal)
+            val volumeSignal = normalizeVolumeSignal(snapshot.volumeChange, snapshot.momentum)
+            val bufSignal = normalizeBufferSignal(snapshot.buffer, currentPrice)
+
+            val totalBaseW = weightEma + weightRsi + weightMomentum + weightVelocity + weightVol + weightVolume + weightBuffer
+            val rawScore = (
+                emaSignal * (weightEma / totalBaseW) +
+                rsiSignal * (weightRsi / totalBaseW) +
+                momSignal * (weightMomentum / totalBaseW) +
+                velSignal * (weightVelocity / totalBaseW) +
+                volSignal * (weightVol / totalBaseW) +
+                volumeSignal * (weightVolume / totalBaseW) +
+                bufSignal * (weightBuffer / totalBaseW)
+            )
+
+            val agreementAdjustment = when (snapshot.exchangeAgreement) {
+                "STRONG_AGREEMENT" -> 0.02
+                "DISAGREEMENT" -> -0.05
+                else -> 0.0
+            }
+
+            val adjustedScore = if (rawScore >= 0.5) {
+                (rawScore + agreementAdjustment).coerceIn(0.0, 1.0)
+            } else {
+                (rawScore - agreementAdjustment).coerceIn(0.0, 1.0)
+            }
+
+            val decision = when {
+                adjustedScore >= thresholdUp -> "UP"
+                adjustedScore <= thresholdDown -> "DOWN"
+                else -> "NO-TRADE"
+            }
+
+            val strength = when {
+                adjustedScore >= 0.80 || adjustedScore <= 0.20 -> "STRONG"
+                adjustedScore >= 0.70 || adjustedScore <= 0.30 -> "MEDIUM"
+                else -> "WEAK"
+            }
+
+            val priceOffset = (adjustedScore - 0.5) * 2.0 * maxOf(10.0, currentPrice * 0.001)
+            val predictedPrice = currentPrice + priceOffset
+
+            return HorizonForecast(
+                horizonSeconds = 30,
+                inputTimestamp = timestamp,
+                maturityTimestamp = timestamp + 30_000L,
+                modelVersion = "v1.0-frozen-30s",
+                predictedReturn = if (currentPrice > 0.0) kotlin.math.ln(predictedPrice / currentPrice) else 0.0,
+                predictedPrice = Math.round(predictedPrice * 100.0) / 100.0,
+                uncertainty = 0.00065,
+                standardizedScore = (adjustedScore - 0.5) * 4.0,
+                score = Math.round(adjustedScore * 1000.0) / 1000.0,
+                decision = decision,
+                direction = decision,
+                eligibility = if (currentPrice > 0.0) "ELIGIBLE" else "INELIGIBLE_MISSING_PRICE",
+                strength = strength,
+                currentPrice = Math.round(currentPrice * 100.0) / 100.0,
+                settlementReference = Math.round(settlementReference * 100.0) / 100.0,
+                featureSnapshot = snapshot,
+                provenance = provenance
+            )
+        }
 
         return horizonModelEngine.createForecast(
             horizonSeconds = horizonSeconds,

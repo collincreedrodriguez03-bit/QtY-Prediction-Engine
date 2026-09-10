@@ -13,10 +13,14 @@ enum class PredictionHorizon(val seconds: Int, val description: String) {
     H_10S(10, "10-Second Fast Scalp"),
     H_30S(30, "30-Second Primary Baseline"),
     H_60S(60, "60-Second Trend"),
+    H_90S(90, "90-Second Micro Trend"),
     H_120S(120, "120-Second Short Swing"),
+    H_180S(180, "180-Second Momentum Wave"),
+    H_240S(240, "240-Second Structural Shift"),
     H_300S(300, "300-Second 5-Minute Structure"),
     H_600S(600, "600-Second 10-Minute Macro Regime"),
-    H_900S(900, "900-Second 15-Minute Contract Target");
+    H_900S(900, "900-Second 15-Minute Contract Target"),
+    H_1200S(1200, "1200-Second 20-Minute Macro Horizon");
 
     companion object {
         val ALL_HORIZONS: List<PredictionHorizon> = values().toList()

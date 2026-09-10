@@ -63,8 +63,8 @@ class MultiHorizonPredictionIntegrityTest {
             settlementReference = 89980.0
         )
 
-        val expectedSeconds = listOf(5, 10, 30, 60, 120, 300, 600, 900)
-        assertEquals("Must generate exactly 8 horizons", 8, record.horizonForecasts.size)
+        val expectedSeconds = listOf(5, 10, 30, 60, 90, 120, 180, 240, 300, 600, 900, 1200)
+        assertEquals("Must generate exactly 12 horizons", 12, record.horizonForecasts.size)
 
         val actualSeconds = record.horizonForecasts.map { it.horizonSeconds }
         assertEquals(expectedSeconds, actualSeconds)
@@ -301,7 +301,7 @@ class MultiHorizonPredictionIntegrityTest {
         assertEquals(100.0, stats5s.winRate, 1e-6)
 
         val allStats = tracker.getAllHorizonStats()
-        assertEquals(8, allStats.size)
+        assertEquals(12, allStats.size)
         assertEquals(PredictionHorizon.ALL_SECONDS, allStats.map { it.horizonSeconds })
     }
 
@@ -324,7 +324,7 @@ class MultiHorizonPredictionIntegrityTest {
 
         // Check research features are attached without mutating core v1 production weights
         assertNotNull(prediction.researchExternalFeatures)
-        assertEquals(8, prediction.horizonForecasts.size)
+        assertEquals(12, prediction.horizonForecasts.size)
 
         val state = loop.state.value
         assertNotNull("EngineState must receive external research features in processPricePoint", state.externalResearchFeatures)

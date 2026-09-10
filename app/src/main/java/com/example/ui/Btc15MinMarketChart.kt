@@ -54,26 +54,24 @@ fun Btc15MinMarketChart(
     engineState: EngineState,
     modifier: Modifier = Modifier
 ) {
-    val currentPrice = if (engineState.latestPrice > 0.0) engineState.latestPrice else 91250.0
+    val currentPrice = if (engineState.latestPrice > 0.0) engineState.latestPrice else 0.0
 
-    // Gather up to 450 points (15 minutes at 2s interval) or minimum fallback series
+    // Gather up to 450 points (15 minutes at 2s interval) or authentic point
     val prices = remember(engineState.recentPrices, currentPrice) {
         if (engineState.recentPrices.isNotEmpty()) {
             engineState.recentPrices.takeLast(450)
+        } else if (currentPrice > 0.0) {
+            listOf(currentPrice)
         } else {
-            listOf(
-                currentPrice - 24.0, currentPrice - 18.0, currentPrice - 30.0,
-                currentPrice - 12.0, currentPrice - 6.0, currentPrice - 14.0,
-                currentPrice + 8.0, currentPrice + 4.0, currentPrice
-            )
+            emptyList()
         }
     }
 
     val minPrice = prices.minOrNull() ?: currentPrice
     val maxPrice = prices.maxOrNull() ?: currentPrice
     val firstPrice = prices.firstOrNull() ?: currentPrice
-    val delta15m = currentPrice - firstPrice
-    val deltaPercent = if (firstPrice > 0) (delta15m / firstPrice) * 100.0 else 0.0
+    val delta15m = if (firstPrice > 0.0 && currentPrice > 0.0) currentPrice - firstPrice else 0.0
+    val deltaPercent = if (firstPrice > 0.0) (delta15m / firstPrice) * 100.0 else 0.0
     val isPositive = delta15m >= 0.0
     val trendColor = if (isPositive) Color(0xFF00E676) else Color(0xFFFF334B)
 

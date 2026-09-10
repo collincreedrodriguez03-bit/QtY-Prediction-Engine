@@ -77,10 +77,10 @@ class Backtester(
                 statisticalUpCount = 0,
                 statisticalDownCount = 0,
                 statisticalNoTradeCount = 0,
-                activeBaselineAlwaysUpWinRate = 50.0,
-                activeBaselineAlwaysDownWinRate = 50.0,
-                globalBaselineAlwaysUpWinRate = 50.0,
-                globalBaselineAlwaysDownWinRate = 50.0,
+                activeBaselineAlwaysUpWinRate = 0.0,
+                activeBaselineAlwaysDownWinRate = 0.0,
+                globalBaselineAlwaysUpWinRate = 0.0,
+                globalBaselineAlwaysDownWinRate = 0.0,
                 operationalTotalTrades = 0,
                 operationalCorrect = 0,
                 operationalIncorrect = 0,
@@ -93,7 +93,6 @@ class Backtester(
 
         val rollingPoints = mutableListOf<PricePoint>()
         var previousVelocity = 0.0
-        val horizonSteps = 15 // 15 steps * 2s = 30s horizon
 
         // Continuous Operational Stream Accumulators
         var opUpCount = 0
@@ -103,7 +102,7 @@ class Backtester(
         var opIncorrectCount = 0
         var opTieCount = 0
 
-        // Statistical Non-Overlapping 15-step Stream Accumulators
+        // Statistical Non-Overlapping Stream Accumulators (spaced >= 30,000ms)
         var statUpCount = 0
         var statDownCount = 0
         var statNoTradeCount = 0
@@ -119,7 +118,7 @@ class Backtester(
         var statGlobalBaseDownWins = 0
         var statGlobalBaseTotal = 0
 
-        var lastStatisticalIndex = -horizonSteps // First eligible sample starts immediately after warmup
+        var lastStatisticalTimestamp = 0L
 
         val predictionList = mutableListOf<PredictionRecord>()
 
@@ -157,10 +156,10 @@ class Backtester(
                 settlementReference = settlementRef
             )
 
-            // Look forward 30 seconds (15 steps) for primary baseline evaluation
-            val futureIndex = i + horizonSteps
-            if (futureIndex < validPrices.size) {
-                val futurePrice = validPrices[futureIndex].price
+            // Look forward 30 seconds via timestamp lookup for primary baseline evaluation
+            val point30s = findObservationAtOrAfter(point.timestamp + 30_000L, validPrices)
+            if (point30s != null) {
+                val futurePrice = point30s.price
                 prediction.actualPrice = futurePrice
                 prediction.actualPrice30s = futurePrice
 
@@ -215,9 +214,9 @@ class Backtester(
                     }
                 }
 
-                // Formal Statistical Non-Overlapping Evaluation (Strided by 15 steps)
-                if (i - lastStatisticalIndex >= horizonSteps) {
-                    lastStatisticalIndex = i
+                // Formal Statistical Non-Overlapping Evaluation (Spaced >= 30,000ms)
+                if (point.timestamp - lastStatisticalTimestamp >= 30_000L) {
+                    lastStatisticalTimestamp = point.timestamp
                     statGlobalBaseTotal++
                     if (contractDelta > 0.0) statGlobalBaseUpWins++
                     if (contractDelta < 0.0) statGlobalBaseDownWins++
@@ -262,21 +261,24 @@ class Backtester(
                         }
                     }
                 }
+            } else {
+                prediction.result = "UNRESOLVED"
+                prediction.result30s = "UNRESOLVED"
             }
 
-            // Resolve each canonical horizon independently (Zero 30s-to-90s scaling)
+            // Resolve each canonical horizon independently via timestamp lookup
             for (forecast in prediction.horizonForecasts) {
                 val hSec = forecast.horizonSeconds
-                val hSteps = maxOf(1, hSec / 2)
-                val hIdx = i + hSteps
+                val targetHTime = forecast.maturityTimestamp
                 val accum = horizonAccumulators[hSec]
                 if (accum != null) {
                     accum.totalForecasts++
-                    if (hIdx < validPrices.size) {
-                        val hFuturePrice = validPrices[hIdx].price
+                    val hPoint = findObservationAtOrAfter(targetHTime, validPrices)
+                    if (hPoint != null) {
+                        val hFuturePrice = hPoint.price
                         forecast.actualPrice = hFuturePrice
                         forecast.actualReturn = if (point.price > 0.0) kotlin.math.ln(hFuturePrice / point.price) else 0.0
-                        forecast.resolvedTimestamp = validPrices[hIdx].timestamp
+                        forecast.resolvedTimestamp = hPoint.timestamp
                         val hDelta = hFuturePrice - forecast.settlementReference
                         val hResult = when (forecast.decision) {
                             "UP" -> when {
@@ -315,11 +317,11 @@ class Backtester(
         val statTotalTrades = statCorrectCount + statIncorrectCount
         val statWinRate = if (statTotalTrades > 0) (statCorrectCount.toDouble() / statTotalTrades) * 100.0 else 0.0
 
-        val activeBaseUpRate = if (statActiveBaseTotal > 0) (statActiveBaseUpWins.toDouble() / statActiveBaseTotal) * 100.0 else 50.0
-        val activeBaseDownRate = if (statActiveBaseTotal > 0) (statActiveBaseDownWins.toDouble() / statActiveBaseTotal) * 100.0 else 50.0
+        val activeBaseUpRate = if (statActiveBaseTotal > 0) (statActiveBaseUpWins.toDouble() / statActiveBaseTotal) * 100.0 else 0.0
+        val activeBaseDownRate = if (statActiveBaseTotal > 0) (statActiveBaseDownWins.toDouble() / statActiveBaseTotal) * 100.0 else 0.0
 
-        val globalBaseUpRate = if (statGlobalBaseTotal > 0) (statGlobalBaseUpWins.toDouble() / statGlobalBaseTotal) * 100.0 else 50.0
-        val globalBaseDownRate = if (statGlobalBaseTotal > 0) (statGlobalBaseDownWins.toDouble() / statGlobalBaseTotal) * 100.0 else 50.0
+        val globalBaseUpRate = if (statGlobalBaseTotal > 0) (statGlobalBaseUpWins.toDouble() / statGlobalBaseTotal) * 100.0 else 0.0
+        val globalBaseDownRate = if (statGlobalBaseTotal > 0) (statGlobalBaseDownWins.toDouble() / statGlobalBaseTotal) * 100.0 else 0.0
 
         val computedHorizonStats = horizonAccumulators.mapValues { (_, accum) ->
             val decisive = accum.correctCount + accum.incorrectCount
@@ -359,6 +361,23 @@ class Backtester(
             samplePredictions = predictionList.takeLast(15),
             horizonStats = computedHorizonStats
         )
+    }
+
+    private fun findObservationAtOrAfter(
+        targetTime: Long,
+        sortedPrices: List<PricePoint>,
+        maxDelayMs: Long = 3000L
+    ): PricePoint? {
+        val idx = sortedPrices.binarySearchBy(targetTime) { it.timestamp }
+        if (idx >= 0) return sortedPrices[idx]
+        val insertion = -idx - 1
+        if (insertion < sortedPrices.size) {
+            val candidate = sortedPrices[insertion]
+            if (candidate.timestamp >= targetTime && candidate.timestamp - targetTime <= maxDelayMs) {
+                return candidate
+            }
+        }
+        return null
     }
 
     private class HorizonAccumulator(val horizonSeconds: Int) {

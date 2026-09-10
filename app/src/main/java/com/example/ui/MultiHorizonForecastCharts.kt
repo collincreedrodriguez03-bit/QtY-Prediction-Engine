@@ -94,28 +94,32 @@ data class HorizonStyleConfig(
 
 /**
  * TOP GRAPH — IMMEDIATE SCALP FORECAST HORIZONS (CANONICAL ONLY):
- * 5s, 10s, 30s, 60s, 120s, 300s.
+ * 5s, 10s, 30s, 60s, 90s, 120s, 180s, 240s, 300s.
  */
 val IMMEDIATE_SCALP_HORIZONS = listOf(
     HorizonStyleConfig(5, "5s", Color(0xFF38BDF8)),                                       // Sky Blue
     HorizonStyleConfig(10, "10s", Color(0xFF06B6D4)),                                     // Cyan
     HorizonStyleConfig(30, "30s", Color(0xFF00E676), isPrimaryBaseline = true),           // Emerald (Primary Baseline)
     HorizonStyleConfig(60, "60s", Color(0xFF10B981)),                                     // Mint
+    HorizonStyleConfig(90, "90s", Color(0xFF34D399)),                                     // Teal
     HorizonStyleConfig(120, "120s", Color(0xFFF97316)),                                   // Orange
+    HorizonStyleConfig(180, "180s", Color(0xFFFB923C)),                                   // Light Orange
+    HorizonStyleConfig(240, "240s", Color(0xFFA78BFA)),                                   // Violet
     HorizonStyleConfig(300, "300s", Color(0xFF818CF8))                                    // Indigo (5m boundary)
 )
 
 /**
  * BOTTOM GRAPH — EXTENDED FORECAST HORIZONS (CANONICAL ONLY):
- * 30s, 60s, 120s, 300s, 600s, 900s.
+ * 30s, 60s, 180s, 300s, 600s, 900s, 1200s.
  */
 val EXTENDED_FORECAST_HORIZONS = listOf(
     HorizonStyleConfig(30, "30s", Color(0xFF00E676), isPrimaryBaseline = true),           // Emerald (Baseline anchor)
     HorizonStyleConfig(60, "60s", Color(0xFF10B981)),                                     // Mint (1m)
-    HorizonStyleConfig(120, "120s", Color(0xFF06B6D4)),                                   // Cyan (2m)
+    HorizonStyleConfig(180, "180s", Color(0xFF06B6D4)),                                   // Cyan (3m)
     HorizonStyleConfig(300, "300s", Color(0xFF818CF8)),                                   // Indigo (5m)
     HorizonStyleConfig(600, "600s", Color(0xFFEAB308)),                                   // Amber (10m)
-    HorizonStyleConfig(900, "900s", Color(0xFFF97316), isContractTarget = true)           // Orange (15m Settlement Contract Target)
+    HorizonStyleConfig(900, "900s", Color(0xFFF97316), isContractTarget = true),          // Orange (15m Settlement Contract Target)
+    HorizonStyleConfig(1200, "1200s", Color(0xFFA855F7))                                  // Purple (20m)
 )
 
 /**
@@ -182,7 +186,7 @@ fun MultiHorizonForecastWorkspace(
  */
 @Composable
 fun PrimarySpotContextCard(engineState: EngineState) {
-    val currentPrice = if (engineState.latestPrice > 0.0) engineState.latestPrice else 91250.0
+    val currentPrice = if (engineState.latestPrice > 0.0) engineState.latestPrice else 0.0
     val prediction = engineState.latestPrediction
     val decision = prediction?.decision ?: "NO-TRADE"
     val score = prediction?.score ?: 0.50
@@ -190,7 +194,7 @@ fun PrimarySpotContextCard(engineState: EngineState) {
         ?: engineState.contractSettlementReference
         ?: engineState.rollingReferencePrice
         ?: currentPrice
-    val strikeDelta = currentPrice - settlementRef
+    val strikeDelta = if (currentPrice > 0.0 && settlementRef > 0.0) currentPrice - settlementRef else 0.0
 
     val decisionColor = when (decision) {
         "UP" -> Color(0xFF00E676)

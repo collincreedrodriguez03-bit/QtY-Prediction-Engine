@@ -68,7 +68,7 @@ fun MarketStructureCard(
 ) {
     val structure = engineState.marketStructure
         ?: MarketStructureSnapshot.empty(
-            price = if (engineState.latestPrice > 0.0) engineState.latestPrice else 91250.0
+            price = if (engineState.latestPrice > 0.0) engineState.latestPrice else 0.0
         )
 
     val currentPrice = if (engineState.latestPrice > 0.0) engineState.latestPrice else structure.currentPrice
